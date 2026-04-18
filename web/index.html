@@ -99,11 +99,10 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 const DELETE_COLOR = "#e74c3c";
 const TODAY_COLOR = "#e67e22";
 
-const BASE_URL = "https://undelete.mapki.com";
-
 map.on("load", () => {
-  addPMTilesSource(BASE_URL + "/merged.pmtiles");
-  loadTodayPMTiles(BASE_URL + "/today.pmtiles");
+  const base = window.location.origin;
+  addPMTilesSource(base + "/merged.pmtiles");
+  loadTodayPMTiles(base + "/today.pmtiles");
 });
 
 function addPMTilesSource(url) {
