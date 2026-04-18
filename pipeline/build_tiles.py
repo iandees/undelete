@@ -44,9 +44,12 @@ class TileBuilder:
     def _run_tippecanoe(self, input_file: Path, output_file: Path):
         """Run tippecanoe on a single GeoJSON file."""
         cmd = [
-            "tippecanoe", "--force", "--no-tile-size-limit",
+            "tippecanoe", "--force", "--no-tile-size-limit", "--no-progress-indicator",
             "-o", str(output_file), "-l", "deletions",
-            "--drop-densest-as-needed", "--extend-zooms-if-still-dropping",
+            "--minimum-zoom=0",
+            "--no-feature-limit",
+            "--drop-rate=1",
+            "--extend-zooms-if-still-dropping",
             str(input_file),
         ]
         logger.info("Building tiles: %s -> %s", input_file.name, output_file.name)
