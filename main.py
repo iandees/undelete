@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-POLL_INTERVAL = 5  # seconds between adiff polls
+POLL_INTERVAL = 60  # seconds between checks for new sequences
 
 
 def main():
@@ -69,8 +69,16 @@ def main():
     logger.info("Starting watcher daemon (poll=%ds, tile_build=%ds, today_build=%ds)",
                 POLL_INTERVAL, tile_build_interval, today_build_interval)
 
+    next_poll = 0.0
+
     while True:
         now = time.time()
+        sleep_for = next_poll - now
+        if sleep_for > 0:
+            logger.debug("Sleeping %.1fs until next poll", sleep_for)
+            time.sleep(sleep_for)
+        now = time.time()
+        next_poll = now + POLL_INTERVAL
         logger.debug("Loop tick: last_seq=%d", last_seq)
 
         # Poll for new adiffs
@@ -79,14 +87,14 @@ def main():
             latest_seq = watcher.get_latest_sequence()
             logger.debug("Latest sequence: %d", latest_seq)
         except Exception:
-            logger.exception("Failed to get latest sequence, retrying in %ds", POLL_INTERVAL)
-            time.sleep(POLL_INTERVAL)
+            logger.exception("Failed to get latest sequence")
             latest_seq = last_seq  # fall through to tile builds
 
-        if last_seq < latest_seq:
+        # Process all available sequences before polling again
+        while last_seq < latest_seq:
             next_seq = last_seq + 1
             try:
-                logger.debug("Fetching and processing seq %d", next_seq)
+                logger.debug("Fetching and processing seq %d (latest=%d)", next_seq, latest_seq)
                 count = watcher.fetch_and_process(next_seq)
                 logger.debug("Processed seq %d: %d deletions", next_seq, count)
                 if count > 0:
@@ -95,9 +103,7 @@ def main():
                 watcher.save_state(last_seq)
             except Exception:
                 logger.exception("Failed to process seq %d", next_seq)
-                time.sleep(POLL_INTERVAL)
-        else:
-            time.sleep(POLL_INTERVAL)
+                break
 
         # Periodic: rebuild today's PMTiles from today's geojsonl
         if (now - last_today_build) >= today_build_interval:
