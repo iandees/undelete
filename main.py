@@ -25,6 +25,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 POLL_INTERVAL = 5  # seconds between adiff polls
 
@@ -70,10 +71,13 @@ def main():
 
     while True:
         now = time.time()
+        logger.debug("Loop tick: last_seq=%d", last_seq)
 
         # Poll for new adiffs
         try:
+            logger.debug("Fetching latest sequence number")
             latest_seq = watcher.get_latest_sequence()
+            logger.debug("Latest sequence: %d", latest_seq)
         except Exception:
             logger.exception("Failed to get latest sequence, retrying in %ds", POLL_INTERVAL)
             time.sleep(POLL_INTERVAL)
@@ -82,7 +86,9 @@ def main():
         if last_seq < latest_seq:
             next_seq = last_seq + 1
             try:
+                logger.debug("Fetching and processing seq %d", next_seq)
                 count = watcher.fetch_and_process(next_seq)
+                logger.debug("Processed seq %d: %d deletions", next_seq, count)
                 if count > 0:
                     logger.info("Seq %d: %d deletions", next_seq, count)
                 last_seq = next_seq
@@ -103,8 +109,10 @@ def main():
                     mtime = today_geojsonl.stat().st_mtime
                     if mtime > last_today_mtime:
                         today_pmtiles = data_dir / "tiles" / f"{today_str}.pmtiles"
+                        logger.debug("Building today's tiles: %s", today_pmtiles)
                         tile_builder.build_tiles(today_geojsonl, today_pmtiles)
                         if uploader:
+                            logger.debug("Uploading today's tiles: %s", today_str)
                             uploader.upload_file(today_pmtiles, f"{today_str}.pmtiles")
                         logger.info("Built and uploaded %s.pmtiles", today_str)
                         last_today_mtime = mtime
@@ -116,12 +124,14 @@ def main():
             last_tile_build = now
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                logger.debug("Building daily tiles")
                 built = tile_builder.build_daily_tiles()
                 if built:
                     logger.info("Built tiles for: %s", ", ".join(built))
                     if uploader:
                         for date_str in built:
                             pmtiles_file = data_dir / "tiles" / f"{date_str}.pmtiles"
+                            logger.debug("Uploading %s", pmtiles_file.name)
                             uploader.upload_file(pmtiles_file, f"{date_str}.pmtiles")
 
                 # Delete geojsonl files for past days that have been tiled
@@ -144,10 +154,12 @@ def main():
                     manifest_path = data_dir / "tiles" / "manifest.json"
                     manifest_path.write_text(json.dumps(manifest))
                     if uploader:
+                        logger.debug("Uploading manifest.json")
                         uploader.upload_file(manifest_path, "manifest.json")
                     logger.info("Wrote manifest with %d files", len(daily_tiles))
 
                 # Prune old pmtiles
+                logger.debug("Pruning old tiles")
                 prune_old_files(data_dir / "tiles", retention_days)
             except Exception:
                 logger.exception("Failed to build/upload tiles")
