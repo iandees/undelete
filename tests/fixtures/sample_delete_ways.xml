@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <action type="delete">
+    <old>
+      <way id="383040181" version="1" user="Jakka" uid="2403313"
+           timestamp="2015-11-27T09:53:27Z" changeset="35607893">
+        <bounds minlat="50.7988902" minlon="3.1965474" maxlat="50.7989166" maxlon="3.1965993"/>
+        <nd ref="3862422559" lon="3.1965474" lat="50.7989125"/>
+        <nd ref="3862422560" lon="3.1965944" lat="50.7989166"/>
+        <nd ref="3862422558" lon="3.1965993" lat="50.7988943"/>
+        <nd ref="3862422557" lon="3.1965523" lat="50.7988902"/>
+        <nd ref="3862422559" lon="3.1965474" lat="50.7989125"/>
+        <tag k="building" v="shed"/>
+      </way>
+    </old>
+    <new>
+      <way id="383040181" version="2" timestamp="2025-01-14T14:51:11Z"
+           uid="170722" user="JosV" changeset="161348179" visible="false"/>
+    </new>
+  </action>
+  <action type="delete">
+    <old>
+      <way id="500000001" version="2" user="mapperC" uid="555"
+           timestamp="2023-03-15T08:00:00Z" changeset="400">
+        <bounds minlat="51.0" minlon="3.0" maxlat="51.1" maxlon="3.1"/>
+        <nd ref="1001" lon="3.0" lat="51.0"/>
+        <nd ref="1002" lon="3.1" lat="51.0"/>
+        <nd ref="1003" lon="3.1" lat="51.1"/>
+        <tag k="highway" v="residential"/>
+        <tag k="name" v="Test Street"/>
+      </way>
+    </old>
+    <new>
+      <way id="500000001" version="3" timestamp="2025-01-14T14:52:00Z"
+           uid="666" user="deleterD" changeset="500" visible="false"/>
+    </new>
+  </action>
+</osm>

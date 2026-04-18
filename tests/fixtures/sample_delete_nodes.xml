@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <action type="delete">
+    <old>
+      <node id="245053500" version="4" lon="6.4840074" lat="48.5848312"/>
+    </old>
+    <new>
+      <node id="245053500" version="5" timestamp="2025-01-14T14:51:43Z"
+            uid="311391" user="patman37" changeset="161348203"
+            lat="48.5848312" lon="6.4840074" visible="false"/>
+    </new>
+  </action>
+  <action type="delete">
+    <old>
+      <node id="100000001" version="3" lon="-73.9857" lat="40.7484"
+            user="mapperA" uid="999" timestamp="2024-06-01T10:00:00Z" changeset="100">
+        <tag k="name" v="Test Node"/>
+        <tag k="amenity" v="cafe"/>
+      </node>
+    </old>
+    <new>
+      <node id="100000001" version="4" timestamp="2025-01-14T15:00:00Z"
+            uid="888" user="deleterB" changeset="200"
+            lat="40.7484" lon="-73.9857" visible="false"/>
+    </new>
+  </action>
+  <action type="modify">
+    <old>
+      <node id="999999" version="1" lon="0.0" lat="0.0"/>
+    </old>
+    <new>
+      <node id="999999" version="2" timestamp="2025-01-14T15:00:00Z"
+            uid="111" user="editor" changeset="300" lon="1.0" lat="1.0"/>
+    </new>
+  </action>
+</osm>
