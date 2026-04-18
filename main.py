@@ -62,6 +62,7 @@ def main():
 
     last_tile_build = 0.0
     last_today_upload = 0.0
+    last_today_mtime = 0.0
 
     logger.info("Starting watcher daemon (poll=%ds, tile_build=%ds, today_upload=%ds)",
                 POLL_INTERVAL, tile_build_interval, today_upload_interval)
@@ -98,10 +99,13 @@ def main():
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 today_geojsonl = data_dir / "deletions" / f"{today_str}.geojsonl"
                 if today_geojsonl.exists():
-                    today_pmtiles = data_dir / "tiles" / "today.pmtiles"
-                    tile_builder.build_tiles(today_geojsonl, today_pmtiles)
-                    uploader.upload_file(today_pmtiles, "today.pmtiles")
-                    logger.info("Uploaded today.pmtiles")
+                    mtime = today_geojsonl.stat().st_mtime
+                    if mtime > last_today_mtime:
+                        today_pmtiles = data_dir / "tiles" / "today.pmtiles"
+                        tile_builder.build_tiles(today_geojsonl, today_pmtiles)
+                        uploader.upload_file(today_pmtiles, "today.pmtiles")
+                        logger.info("Uploaded today.pmtiles")
+                        last_today_mtime = mtime
                 last_today_upload = now
             except Exception:
                 logger.exception("Failed to build/upload today.pmtiles")
