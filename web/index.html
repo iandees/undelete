@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OSM Undelete</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+    .config-bar {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      font-size: 14px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .config-bar input {
+      font-size: 13px;
+      padding: 4px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      width: 400px;
+    }
+    .config-bar button {
+      padding: 4px 12px;
+      border: 1px solid #0078d4;
+      border-radius: 4px;
+      background: #0078d4;
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .maplibregl-popup-content {
+      max-width: 400px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .popup-title {
+      font-weight: bold;
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+    .popup-meta {
+      color: #666;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .popup-meta a { color: #0078d4; }
+    .tag-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 8px;
+    }
+    .tag-table td {
+      padding: 2px 6px;
+      border-bottom: 1px solid #eee;
+      font-size: 12px;
+    }
+    .tag-table td:first-child {
+      font-weight: 600;
+      color: #444;
+      white-space: nowrap;
+    }
+    .popup-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .popup-actions a, .popup-actions button {
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      text-decoration: none;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background: #f5f5f5;
+      color: #333;
+    }
+    .popup-actions a:hover, .popup-actions button:hover {
+      background: #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+
+<div class="config-bar">
+  <label>PMTiles URL:</label>
+  <input type="text" id="pmtiles-url" placeholder="https://your-r2-bucket.example.com/merged.pmtiles">
+  <button onclick="loadTiles()">Load</button>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
+<script>
+
+// Register PMTiles protocol
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      },
+    },
+    layers: [{ id: "osm", type: "raster", source: "osm" }],
+  },
+  center: [0, 30],
+  zoom: 2,
+});
+
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+// Layer colors
+const DELETE_COLOR = "#e74c3c";
+const TODAY_COLOR = "#e67e22";
+
+map.on("load", () => {
+  // Try loading from URL hash
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const savedUrl = params.get("pmtiles");
+  if (savedUrl) {
+    document.getElementById("pmtiles-url").value = savedUrl;
+    addPMTilesSource(savedUrl);
+  }
+});
+
+function loadTiles() {
+  const url = document.getElementById("pmtiles-url").value.trim();
+  if (!url) return;
+
+  // Save to URL hash
+  window.location.hash = `pmtiles=${encodeURIComponent(url)}`;
+
+  // Remove existing layers/sources
+  for (const layerId of ["deletions-points", "deletions-lines", "deletions-polygons"]) {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+  }
+  if (map.getSource("deletions")) map.removeSource("deletions");
+
+  addPMTilesSource(url);
+
+  // Also try loading today.geojson from the same base URL
+  const baseUrl = url.replace(/\/[^/]+$/, "");
+  loadTodayGeoJSON(baseUrl + "/today.geojson");
+}
+
+function addPMTilesSource(url) {
+  map.addSource("deletions", {
+    type: "vector",
+    url: `pmtiles://${url}`,
+  });
+
+  addDeletionLayers("deletions", DELETE_COLOR);
+}
+
+function addDeletionLayers(sourceId, color) {
+  const sourceLayer = "deletions";
+
+  map.addLayer({
+    id: sourceId + "-polygons",
+    type: "fill",
+    source: sourceId,
+    "source-layer": sourceLayer,
+    filter: ["==", "$type", "Polygon"],
+    paint: {
+      "fill-color": color,
+      "fill-opacity": 0.3,
+      "fill-outline-color": color,
+    },
+  });
+
+  map.addLayer({
+    id: sourceId + "-lines",
+    type: "line",
+    source: sourceId,
+    "source-layer": sourceLayer,
+    filter: ["==", "$type", "LineString"],
+    paint: {
+      "line-color": color,
+      "line-width": 2,
+    },
+  });
+
+  map.addLayer({
+    id: sourceId + "-points",
+    type: "circle",
+    source: sourceId,
+    "source-layer": sourceLayer,
+    filter: ["==", "$type", "Point"],
+    paint: {
+      "circle-radius": 5,
+      "circle-color": color,
+      "circle-stroke-width": 1,
+      "circle-stroke-color": "#fff",
+    },
+  });
+}
+
+function loadTodayGeoJSON(url) {
+  // Remove existing today layers
+  for (const layerId of ["today-points", "today-lines", "today-polygons"]) {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+  }
+  if (map.getSource("today")) map.removeSource("today");
+
+  fetch(url)
+    .then((r) => {
+      if (!r.ok) throw new Error("No today.geojson");
+      return r.json();
+    })
+    .then((geojson) => {
+      map.addSource("today", { type: "geojson", data: geojson });
+
+      map.addLayer({
+        id: "today-polygons",
+        type: "fill",
+        source: "today",
+        filter: ["==", "$type", "Polygon"],
+        paint: { "fill-color": TODAY_COLOR, "fill-opacity": 0.3, "fill-outline-color": TODAY_COLOR },
+      });
+      map.addLayer({
+        id: "today-lines",
+        type: "line",
+        source: "today",
+        filter: ["==", "$type", "LineString"],
+        paint: { "line-color": TODAY_COLOR, "line-width": 2 },
+      });
+      map.addLayer({
+        id: "today-points",
+        type: "circle",
+        source: "today",
+        filter: ["==", "$type", "Point"],
+        paint: { "circle-radius": 5, "circle-color": TODAY_COLOR, "circle-stroke-width": 1, "circle-stroke-color": "#fff" },
+      });
+    })
+    .catch(() => {
+      // today.geojson not available — that's fine
+    });
+
+  // Refresh today's data periodically
+  setInterval(() => {
+    fetch(url)
+      .then((r) => r.ok ? r.json() : null)
+      .then((geojson) => {
+        if (geojson && map.getSource("today")) {
+          map.getSource("today").setData(geojson);
+        }
+      })
+      .catch(() => {});
+  }, 60000);
+}
+
+// Click handler for popups
+const clickableLayers = [
+  "deletions-points", "deletions-lines", "deletions-polygons",
+  "today-points", "today-lines", "today-polygons",
+];
+
+map.on("click", (e) => {
+  const features = map.queryRenderedFeatures(e.point, { layers: clickableLayers.filter((l) => map.getLayer(l)) });
+  if (features.length === 0) return;
+
+  const f = features[0];
+  const props = f.properties;
+  const osmType = props.osm_type;
+  const osmId = props.osm_id;
+
+  // Parse tags — may be a JSON string
+  let tags = props.tags;
+  if (typeof tags === "string") {
+    try { tags = JSON.parse(tags); } catch { tags = {}; }
+  }
+  tags = tags || {};
+
+  // Build popup
+  let html = `<div class="popup-title">${osmType}/${osmId}</div>`;
+  html += `<div class="popup-meta">`;
+  html += `Deleted <strong>${props.deleted_at || "unknown"}</strong>`;
+  html += ` by <a href="https://www.openstreetmap.org/user/${encodeURIComponent(props.deleted_by)}" target="_blank">${props.deleted_by || "unknown"}</a>`;
+  html += ` in <a href="https://www.openstreetmap.org/changeset/${props.deleted_changeset}" target="_blank">changeset ${props.deleted_changeset}</a>`;
+  html += `</div>`;
+
+  // Tags table
+  const tagEntries = Object.entries(tags);
+  if (tagEntries.length > 0) {
+    html += `<table class="tag-table">`;
+    for (const [k, v] of tagEntries) {
+      html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`;
+    }
+    html += `</table>`;
+  } else {
+    html += `<p style="color:#999;font-size:12px;">No tags</p>`;
+  }
+
+  // Actions
+  const center = getFeatureCenter(f);
+  const josmUrl = `http://localhost:8111/load_and_zoom?left=${center[0] - 0.001}&right=${center[0] + 0.001}&bottom=${center[1] - 0.001}&top=${center[1] + 0.001}`;
+
+  html += `<div class="popup-actions">`;
+  html += `<a href="https://www.openstreetmap.org/${osmType}/${osmId}/history" target="_blank">History</a>`;
+  html += `<a href="${josmUrl}" target="_blank">Open in JOSM</a>`;
+  html += `<button onclick="downloadOsm('${osmType}', ${osmId}, ${JSON.stringify(JSON.stringify(tags))}, ${JSON.stringify(JSON.stringify(f.geometry))})">Download .osm</button>`;
+  html += `</div>`;
+
+  new maplibregl.Popup()
+    .setLngLat(e.lngLat)
+    .setHTML(html)
+    .addTo(map);
+});
+
+// Change cursor on hover
+for (const layer of clickableLayers) {
+  map.on("mouseenter", layer, () => { if (map.getLayer(layer)) map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", layer, () => { if (map.getLayer(layer)) map.getCanvas().style.cursor = ""; });
+}
+
+function getFeatureCenter(feature) {
+  const geom = feature.geometry;
+  if (geom.type === "Point") return geom.coordinates;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const coords = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates;
+  for (const c of coords) {
+    if (c[0] < minX) minX = c[0];
+    if (c[0] > maxX) maxX = c[0];
+    if (c[1] < minY) minY = c[1];
+    if (c[1] > maxY) maxY = c[1];
+  }
+  return [(minX + maxX) / 2, (minY + maxY) / 2];
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function downloadOsm(osmType, osmId, tagsJson, geomJson) {
+  const tags = JSON.parse(tagsJson);
+  const geom = JSON.parse(geomJson);
+
+  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  xml += '<osm version="0.6" generator="osm-undelete">\n';
+
+  if (osmType === "node") {
+    xml += `  <node id="-1" lon="${geom.coordinates[0]}" lat="${geom.coordinates[1]}" version="1">\n`;
+    for (const [k, v] of Object.entries(tags)) {
+      xml += `    <tag k="${escapeXml(k)}" v="${escapeXml(v)}"/>\n`;
+    }
+    xml += `  </node>\n`;
+  } else if (osmType === "way") {
+    const coords = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates;
+    let nodeId = -1;
+    for (const c of coords) {
+      xml += `  <node id="${nodeId}" lon="${c[0]}" lat="${c[1]}" version="1"/>\n`;
+      nodeId--;
+    }
+    xml += `  <way id="-1" version="1">\n`;
+    for (let i = -1; i > nodeId; i--) {
+      xml += `    <nd ref="${i}"/>\n`;
+    }
+    for (const [k, v] of Object.entries(tags)) {
+      xml += `    <tag k="${escapeXml(k)}" v="${escapeXml(v)}"/>\n`;
+    }
+    xml += `  </way>\n`;
+  }
+
+  xml += '</osm>';
+
+  const blob = new Blob([xml], { type: "application/xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${osmType}-${osmId}.osm`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeXml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+</script>
+</body>
+</html>
