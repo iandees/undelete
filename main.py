@@ -13,7 +13,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from daemon.watcher import Watcher
-from daemon.geojson_writer import GeoJSONWriter
 from pipeline.build_tiles import TileBuilder
 from pipeline.merge_upload import R2Uploader
 from pipeline.prune import prune_old_files
@@ -93,20 +92,19 @@ def main():
         else:
             time.sleep(POLL_INTERVAL)
 
-        # Periodic: upload today's GeoJSON
+        # Periodic: build and upload today's PMTiles
         if uploader and (now - last_today_upload) >= today_upload_interval:
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                writer = GeoJSONWriter(data_dir / "deletions")
-                feature_count = writer.get_feature_count(today_str)
-                if feature_count > 0:
-                    tmp_path = data_dir / "today.geojson.tmp"
-                    writer.write_feature_collection(today_str, tmp_path)
-                    uploader.upload_today_geojson(tmp_path, feature_count)
-                    tmp_path.unlink(missing_ok=True)
+                today_geojsonl = data_dir / "deletions" / f"{today_str}.geojsonl"
+                if today_geojsonl.exists():
+                    today_pmtiles = data_dir / "tiles" / "today.pmtiles"
+                    tile_builder.build_tiles(today_geojsonl, today_pmtiles)
+                    uploader.upload_file(today_pmtiles, "today.pmtiles")
+                    logger.info("Uploaded today.pmtiles")
                 last_today_upload = now
             except Exception:
-                logger.exception("Failed to upload today.geojson")
+                logger.exception("Failed to build/upload today.pmtiles")
 
         # Periodic: build tiles and upload
         if (now - last_tile_build) >= tile_build_interval:

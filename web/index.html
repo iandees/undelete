@@ -162,9 +162,9 @@ function loadTiles() {
 
   addPMTilesSource(url);
 
-  // Also try loading today.geojson from the same base URL
+  // Also try loading today.pmtiles from the same base URL
   const baseUrl = url.replace(/\/[^/]+$/, "");
-  loadTodayGeoJSON(baseUrl + "/today.geojson");
+  loadTodayPMTiles(baseUrl + "/today.pmtiles");
 }
 
 function addPMTilesSource(url) {
@@ -219,58 +219,19 @@ function addDeletionLayers(sourceId, color) {
   });
 }
 
-function loadTodayGeoJSON(url) {
+function loadTodayPMTiles(url) {
   // Remove existing today layers
   for (const layerId of ["today-points", "today-lines", "today-polygons"]) {
     if (map.getLayer(layerId)) map.removeLayer(layerId);
   }
   if (map.getSource("today")) map.removeSource("today");
 
-  fetch(url)
-    .then((r) => {
-      if (!r.ok) throw new Error("No today.geojson");
-      return r.json();
-    })
-    .then((geojson) => {
-      map.addSource("today", { type: "geojson", data: geojson });
+  map.addSource("today", {
+    type: "vector",
+    url: `pmtiles://${url}`,
+  });
 
-      map.addLayer({
-        id: "today-polygons",
-        type: "fill",
-        source: "today",
-        filter: ["==", "$type", "Polygon"],
-        paint: { "fill-color": TODAY_COLOR, "fill-opacity": 0.3, "fill-outline-color": TODAY_COLOR },
-      });
-      map.addLayer({
-        id: "today-lines",
-        type: "line",
-        source: "today",
-        filter: ["==", "$type", "LineString"],
-        paint: { "line-color": TODAY_COLOR, "line-width": 2 },
-      });
-      map.addLayer({
-        id: "today-points",
-        type: "circle",
-        source: "today",
-        filter: ["==", "$type", "Point"],
-        paint: { "circle-radius": 5, "circle-color": TODAY_COLOR, "circle-stroke-width": 1, "circle-stroke-color": "#fff" },
-      });
-    })
-    .catch(() => {
-      // today.geojson not available — that's fine
-    });
-
-  // Refresh today's data periodically
-  setInterval(() => {
-    fetch(url)
-      .then((r) => r.ok ? r.json() : null)
-      .then((geojson) => {
-        if (geojson && map.getSource("today")) {
-          map.getSource("today").setData(geojson);
-        }
-      })
-      .catch(() => {});
-  }, 60000);
+  addDeletionLayers("today", TODAY_COLOR);
 }
 
 // Click handler for popups

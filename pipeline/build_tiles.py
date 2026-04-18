@@ -41,6 +41,10 @@ class TileBuilder:
         logger.info("Merging %d daily files into %s", len(daily_files), merged_file)
         subprocess.run(cmd, check=True)
 
+    def build_tiles(self, input_file: Path, output_file: Path):
+        """Build PMTiles from a GeoJSON file."""
+        self._run_tippecanoe(input_file, output_file)
+
     def _run_tippecanoe(self, input_file: Path, output_file: Path):
         """Run tippecanoe on a single GeoJSON file."""
         cmd = [
