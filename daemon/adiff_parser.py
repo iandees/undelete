@@ -12,13 +12,13 @@ def parse_adiff(source):
 
     for _, action in context:
         if action.get("type") != "delete":
-            action.clear()
+            _clear_action(action)
             continue
 
         old_elem = action.find("old")
         new_elem = action.find("new")
         if old_elem is None or new_elem is None:
-            action.clear()
+            _clear_action(action)
             continue
 
         old_obj = old_elem[0]
@@ -29,7 +29,7 @@ def parse_adiff(source):
 
         geometry = _extract_geometry(obj_type, old_obj)
         if geometry is None:
-            action.clear()
+            _clear_action(action)
             continue
 
         feature = {
@@ -46,8 +46,16 @@ def parse_adiff(source):
                 "deleted_at": new_obj.get("timestamp", ""),
             },
         }
-        action.clear()
+        _clear_action(action)
         yield feature
+
+
+def _clear_action(action):
+    """Clear element data and detach from parent to free memory during iterparse."""
+    parent = action.getparent()
+    action.clear()
+    if parent is not None:
+        parent.remove(action)
 
 
 def _extract_geometry(obj_type, elem):
