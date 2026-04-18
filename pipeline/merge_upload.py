@@ -1,6 +1,5 @@
 """Upload PMTiles and GeoJSON to Cloudflare R2."""
 
-import json
 import logging
 from pathlib import Path
 
@@ -24,13 +23,12 @@ class R2Uploader:
         logger.info("Uploading %s -> s3://%s/%s", local_path, self.bucket_name, remote_key)
         self.client.upload_file(str(local_path), self.bucket_name, remote_key)
 
-    def upload_today_geojson(self, feature_collection: dict):
-        """Upload today's GeoJSON FeatureCollection to R2."""
-        body = json.dumps(feature_collection, separators=(",", ":"))
-        self.client.put_object(
-            Bucket=self.bucket_name,
-            Key="today.geojson",
-            Body=body,
-            ContentType="application/geo+json",
+    def upload_today_geojson(self, local_path: Path, feature_count: int):
+        """Upload today's GeoJSON FeatureCollection file to R2."""
+        self.client.upload_file(
+            str(local_path),
+            self.bucket_name,
+            "today.geojson",
+            ExtraArgs={"ContentType": "application/geo+json"},
         )
-        logger.info("Uploaded today.geojson (%d features)", len(feature_collection["features"]))
+        logger.info("Uploaded today.geojson (%d features)", feature_count)

@@ -98,9 +98,12 @@ def main():
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 writer = GeoJSONWriter(data_dir / "deletions")
-                fc = writer.get_feature_collection(today_str)
-                if fc["features"]:
-                    uploader.upload_today_geojson(fc)
+                feature_count = writer.get_feature_count(today_str)
+                if feature_count > 0:
+                    tmp_path = data_dir / "today.geojson.tmp"
+                    writer.write_feature_collection(today_str, tmp_path)
+                    uploader.upload_today_geojson(tmp_path, feature_count)
+                    tmp_path.unlink(missing_ok=True)
                 last_today_upload = now
             except Exception:
                 logger.exception("Failed to upload today.geojson")

@@ -45,12 +45,25 @@ def test_append_multiple_features(tmp_path):
     assert len(lines) == 2
 
 
-def test_get_today_geojson(tmp_path):
+def test_get_feature_count(tmp_path):
+    writer = GeoJSONWriter(tmp_path)
+    assert writer.get_feature_count("2025-01-14") == 0
+
+    writer.append(_make_feature(osm_id=1), date_str="2025-01-14")
+    writer.append(_make_feature(osm_id=2), date_str="2025-01-14")
+
+    assert writer.get_feature_count("2025-01-14") == 2
+
+
+def test_write_feature_collection(tmp_path):
     writer = GeoJSONWriter(tmp_path)
     writer.append(_make_feature(osm_id=1), date_str="2025-01-14")
     writer.append(_make_feature(osm_id=2), date_str="2025-01-14")
 
-    fc = writer.get_feature_collection("2025-01-14")
+    output = tmp_path / "output.geojson"
+    writer.write_feature_collection("2025-01-14", output)
+
+    fc = json.loads(output.read_text())
     assert fc["type"] == "FeatureCollection"
     assert len(fc["features"]) == 2
 

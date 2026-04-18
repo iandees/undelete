@@ -25,10 +25,8 @@ def test_upload_file(tmp_path):
 
 
 def test_upload_today_geojson(tmp_path):
-    geojson_data = {
-        "type": "FeatureCollection",
-        "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}}],
-    }
+    geojson_file = tmp_path / "today.geojson"
+    geojson_file.write_text('{"type":"FeatureCollection","features":[]}')
 
     mock_client = MagicMock()
     with patch("pipeline.merge_upload.boto3.client", return_value=mock_client):
@@ -38,12 +36,11 @@ def test_upload_today_geojson(tmp_path):
             secret_access_key="secret",
             bucket_name="test-bucket",
         )
-        uploader.upload_today_geojson(geojson_data)
+        uploader.upload_today_geojson(geojson_file, feature_count=0)
 
-    mock_client.put_object.assert_called_once()
-    call_kwargs = mock_client.put_object.call_args[1]
-    assert call_kwargs["Bucket"] == "test-bucket"
-    assert call_kwargs["Key"] == "today.geojson"
-    assert call_kwargs["ContentType"] == "application/geo+json"
-    body = json.loads(call_kwargs["Body"])
-    assert body["type"] == "FeatureCollection"
+    mock_client.upload_file.assert_called_with(
+        str(geojson_file),
+        "test-bucket",
+        "today.geojson",
+        ExtraArgs={"ContentType": "application/geo+json"},
+    )
