@@ -63,11 +63,11 @@ def test_fetch_and_process(tmp_path):
     assert feature["properties"]["tags"]["name"] == "Deleted Node"
 
 
-def test_fetch_404_returns_zero(tmp_path):
+def test_fetch_404_returns_none(tmp_path):
     mock_response = MagicMock()
     mock_response.status_code = 404
 
     with patch("daemon.watcher.requests.get", return_value=mock_response):
         watcher = Watcher(data_dir=tmp_path)
-        count = watcher.fetch_and_process(9999999999)
-        assert count == 0
+        result = watcher.fetch_and_process(9999999999)
+        assert result is None
