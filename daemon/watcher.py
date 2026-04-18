@@ -51,6 +51,7 @@ class Watcher:
             resp.close()
             return 0
         resp.raise_for_status()
+        resp.raw.decode_content = True
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         count = 0
