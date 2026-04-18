@@ -60,6 +60,41 @@
     .popup-actions a:hover, .popup-actions button:hover {
       background: #e0e0e0;
     }
+    #about {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.92);
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #333;
+      z-index: 1;
+      max-width: 300px;
+      line-height: 1.5;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    }
+    #about-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      color: #999;
+      float: right;
+      padding: 0 0 0 8px;
+      line-height: 1;
+    }
+    #about h1 {
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    #about p {
+      margin: 4px 0;
+      color: #555;
+    }
+    #about a { color: #0078d4; }
+    #about.collapsed #about-body { display: none; }
+    #about.collapsed h1 { margin-bottom: 0; }
     #status-bar {
       position: absolute;
       bottom: 8px;
@@ -77,6 +112,15 @@
 <body>
 
 <div id="map"></div>
+<div id="about">
+  <button id="about-toggle" onclick="document.getElementById('about').classList.toggle('collapsed')">&#x2715;</button>
+  <h1>OSM Undelete</h1>
+  <div id="about-body">
+    <p>Showing OpenStreetMap objects that have been deleted in the last 90 days. Click any feature to see details, view its history, or download the original data.</p>
+    <p><span style="color:#e74c3c">&#9679;</span> Historical deletions &nbsp; <span style="color:#e67e22">&#9679;</span> Deleted today</p>
+    <p><a href="https://github.com/iandees/undelete" target="_blank">GitHub</a></p>
+  </div>
+</div>
 <div id="status-bar"></div>
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
