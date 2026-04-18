@@ -1,0 +1,10 @@
+[project]
+name = "osm-undelete"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "lxml",
+    "boto3",
+    "python-dotenv",
+]
