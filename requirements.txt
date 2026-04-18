@@ -1,4 +1,0 @@
-requests
-lxml
-boto3
-python-dotenv
