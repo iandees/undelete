@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from pathlib import Path
 
 from daemon.adiff_parser import parse_adiff
@@ -7,8 +8,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_parse_deleted_nodes():
-    xml_bytes = (FIXTURES / "sample_delete_nodes.xml").read_bytes()
-    features = list(parse_adiff(xml_bytes))
+    features = list(parse_adiff(str(FIXTURES / "sample_delete_nodes.xml")))
 
     # Should only return delete actions, not modify
     assert len(features) == 2
@@ -38,8 +38,7 @@ def test_parse_deleted_nodes():
 
 
 def test_parse_deleted_ways():
-    xml_bytes = (FIXTURES / "sample_delete_ways.xml").read_bytes()
-    features = list(parse_adiff(xml_bytes))
+    features = list(parse_adiff(str(FIXTURES / "sample_delete_ways.xml")))
 
     assert len(features) == 2
 
@@ -62,6 +61,6 @@ def test_parse_deleted_ways():
 
 
 def test_parse_empty_xml():
-    xml_bytes = b'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6"></osm>'
-    features = list(parse_adiff(xml_bytes))
+    source = BytesIO(b'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6"></osm>')
+    features = list(parse_adiff(source))
     assert features == []

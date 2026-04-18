@@ -3,17 +3,22 @@
 from lxml import etree
 
 
-def parse_adiff(xml_bytes: bytes):
-    """Parse augmented diff XML bytes and yield GeoJSON features for deleted objects."""
-    root = etree.fromstring(xml_bytes)
+def parse_adiff(source):
+    """Parse augmented diff XML and yield GeoJSON features for deleted objects.
 
-    for action in root.iterchildren("action"):
+    source can be a file-like object (for streaming) or bytes.
+    """
+    context = etree.iterparse(source, events=("end",), tag="action")
+
+    for _, action in context:
         if action.get("type") != "delete":
+            action.clear()
             continue
 
         old_elem = action.find("old")
         new_elem = action.find("new")
         if old_elem is None or new_elem is None:
+            action.clear()
             continue
 
         old_obj = old_elem[0]
@@ -24,6 +29,7 @@ def parse_adiff(xml_bytes: bytes):
 
         geometry = _extract_geometry(obj_type, old_obj)
         if geometry is None:
+            action.clear()
             continue
 
         feature = {
@@ -40,6 +46,7 @@ def parse_adiff(xml_bytes: bytes):
                 "deleted_at": new_obj.get("timestamp", ""),
             },
         }
+        action.clear()
         yield feature
 
 

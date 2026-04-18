@@ -46,15 +46,17 @@ class Watcher:
     def fetch_and_process(self, seq: int) -> int:
         """Fetch one adiff by sequence number, extract deletions, return count."""
         url = ADIFF_URL.format(seq=seq)
-        resp = requests.get(url)
+        resp = requests.get(url, stream=True)
         if resp.status_code == 404:
+            resp.close()
             return 0
         resp.raise_for_status()
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         count = 0
-        for feature in parse_adiff(resp.content):
+        for feature in parse_adiff(resp.raw):
             self.writer.append(feature, date_str=today)
             count += 1
+        resp.close()
 
         return count

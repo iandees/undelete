@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -44,7 +45,7 @@ def test_save_and_load_state(tmp_path):
 
 def test_fetch_and_process(tmp_path):
     mock_response = MagicMock()
-    mock_response.content = SAMPLE_ADIFF
+    mock_response.raw = BytesIO(SAMPLE_ADIFF)
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
 
