@@ -10,38 +10,6 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 
-    .config-bar {
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      background: white;
-      padding: 8px 16px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      font-size: 14px;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .config-bar input {
-      font-size: 13px;
-      padding: 4px 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      width: 400px;
-    }
-    .config-bar button {
-      padding: 4px 12px;
-      border: 1px solid #0078d4;
-      border-radius: 4px;
-      background: #0078d4;
-      color: white;
-      cursor: pointer;
-      font-size: 13px;
-    }
-
     .maplibregl-popup-content {
       max-width: 400px;
       max-height: 400px;
@@ -96,12 +64,6 @@
 </head>
 <body>
 
-<div class="config-bar">
-  <label>PMTiles URL:</label>
-  <input type="text" id="pmtiles-url" placeholder="https://your-r2-bucket.example.com/merged.pmtiles">
-  <button onclick="loadTiles()">Load</button>
-</div>
-
 <div id="map"></div>
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
@@ -137,35 +99,12 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 const DELETE_COLOR = "#e74c3c";
 const TODAY_COLOR = "#e67e22";
 
+const BASE_URL = "https://undelete.mapki.com";
+
 map.on("load", () => {
-  // Try loading from URL hash
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  const savedUrl = params.get("pmtiles");
-  if (savedUrl) {
-    document.getElementById("pmtiles-url").value = savedUrl;
-    addPMTilesSource(savedUrl);
-  }
+  addPMTilesSource(BASE_URL + "/merged.pmtiles");
+  loadTodayPMTiles(BASE_URL + "/today.pmtiles");
 });
-
-function loadTiles() {
-  const url = document.getElementById("pmtiles-url").value.trim();
-  if (!url) return;
-
-  // Save to URL hash
-  window.location.hash = `pmtiles=${encodeURIComponent(url)}`;
-
-  // Remove existing layers/sources
-  for (const layerId of ["deletions-points", "deletions-lines", "deletions-polygons"]) {
-    if (map.getLayer(layerId)) map.removeLayer(layerId);
-  }
-  if (map.getSource("deletions")) map.removeSource("deletions");
-
-  addPMTilesSource(url);
-
-  // Also try loading today.pmtiles from the same base URL
-  const baseUrl = url.replace(/\/[^/]+$/, "");
-  loadTodayPMTiles(baseUrl + "/today.pmtiles");
-}
 
 function addPMTilesSource(url) {
   map.addSource("deletions", {
