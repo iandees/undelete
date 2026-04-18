@@ -30,6 +30,22 @@ logger.setLevel(logging.DEBUG)
 POLL_INTERVAL = 60  # seconds between checks for new sequences
 
 
+def write_and_upload_manifest(data_dir: Path, uploader: R2Uploader | None):
+    """Write manifest.json listing all daily tiles and upload it."""
+    daily_tiles = sorted((data_dir / "tiles").glob("????-??-??.pmtiles"))
+    if daily_tiles:
+        manifest = {
+            "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "files": [f.name for f in daily_tiles],
+        }
+        manifest_path = data_dir / "tiles" / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        if uploader:
+            logger.debug("Uploading manifest.json")
+            uploader.upload_file(manifest_path, "manifest.json")
+        logger.info("Wrote manifest with %d files", len(daily_tiles))
+
+
 def main():
     data_dir = Path(os.environ.get("DATA_DIR", "./data"))
 
@@ -123,6 +139,7 @@ def main():
                         if uploader:
                             logger.debug("Uploading today's tiles: %s", today_str)
                             uploader.upload_file(today_pmtiles, f"{today_str}.pmtiles")
+                            write_and_upload_manifest(data_dir, uploader)
                         logger.info("Built and uploaded %s.pmtiles", today_str)
                         last_today_mtime = mtime
             except Exception:
@@ -154,18 +171,7 @@ def main():
                         logger.info("Cleaned up %s", geojsonl.name)
 
                 # Write and upload manifest
-                daily_tiles = sorted((data_dir / "tiles").glob("????-??-??.pmtiles"))
-                if daily_tiles:
-                    manifest = {
-                        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "files": [f.name for f in daily_tiles],
-                    }
-                    manifest_path = data_dir / "tiles" / "manifest.json"
-                    manifest_path.write_text(json.dumps(manifest))
-                    if uploader:
-                        logger.debug("Uploading manifest.json")
-                        uploader.upload_file(manifest_path, "manifest.json")
-                    logger.info("Wrote manifest with %d files", len(daily_tiles))
+                write_and_upload_manifest(data_dir, uploader)
 
                 # Prune old pmtiles
                 logger.debug("Pruning old tiles")
