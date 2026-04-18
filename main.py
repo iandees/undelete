@@ -3,11 +3,12 @@
 Runs the watcher daemon with periodic tile builds and R2 uploads.
 """
 
+import json
 import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,7 +50,7 @@ def main():
         logger.info("R2 upload disabled (R2_ENDPOINT_URL not set)")
 
     tile_build_interval = int(os.environ.get("TILE_BUILD_INTERVAL", "600"))
-    today_upload_interval = int(os.environ.get("TODAY_UPLOAD_INTERVAL", "60"))
+    today_build_interval = int(os.environ.get("TODAY_BUILD_INTERVAL", "60"))
     retention_days = int(os.environ.get("TILE_RETENTION_DAYS", "90"))
 
     # Determine starting sequence
@@ -61,11 +62,11 @@ def main():
         logger.info("Resuming from saved sequence: %d", last_seq)
 
     last_tile_build = 0.0
-    last_today_upload = 0.0
+    last_today_build = 0.0
     last_today_mtime = 0.0
 
-    logger.info("Starting watcher daemon (poll=%ds, tile_build=%ds, today_upload=%ds)",
-                POLL_INTERVAL, tile_build_interval, today_upload_interval)
+    logger.info("Starting watcher daemon (poll=%ds, tile_build=%ds, today_build=%ds)",
+                POLL_INTERVAL, tile_build_interval, today_build_interval)
 
     while True:
         now = time.time()
@@ -76,7 +77,7 @@ def main():
         except Exception:
             logger.exception("Failed to get latest sequence, retrying in %ds", POLL_INTERVAL)
             time.sleep(POLL_INTERVAL)
-            continue
+            latest_seq = last_seq  # fall through to tile builds
 
         if last_seq < latest_seq:
             next_seq = last_seq + 1
@@ -89,44 +90,65 @@ def main():
             except Exception:
                 logger.exception("Failed to process seq %d", next_seq)
                 time.sleep(POLL_INTERVAL)
-                continue
         else:
             time.sleep(POLL_INTERVAL)
 
-        # Periodic: build and upload today's PMTiles
-        if uploader and (now - last_today_upload) >= today_upload_interval:
+        # Periodic: rebuild today's PMTiles from today's geojsonl
+        if (now - last_today_build) >= today_build_interval:
+            last_today_build = now
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 today_geojsonl = data_dir / "deletions" / f"{today_str}.geojsonl"
                 if today_geojsonl.exists():
                     mtime = today_geojsonl.stat().st_mtime
                     if mtime > last_today_mtime:
-                        today_pmtiles = data_dir / "tiles" / "today.pmtiles"
+                        today_pmtiles = data_dir / "tiles" / f"{today_str}.pmtiles"
                         tile_builder.build_tiles(today_geojsonl, today_pmtiles)
-                        uploader.upload_file(today_pmtiles, "today.pmtiles")
-                        logger.info("Uploaded today.pmtiles")
+                        if uploader:
+                            uploader.upload_file(today_pmtiles, f"{today_str}.pmtiles")
+                        logger.info("Built and uploaded %s.pmtiles", today_str)
                         last_today_mtime = mtime
-                last_today_upload = now
             except Exception:
-                logger.exception("Failed to build/upload today.pmtiles")
+                logger.exception("Failed to build/upload today's tiles")
 
-        # Periodic: build tiles and upload
+        # Periodic: build tiles for older days + write manifest
         if (now - last_tile_build) >= tile_build_interval:
+            last_tile_build = now
             try:
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 built = tile_builder.build_daily_tiles()
                 if built:
                     logger.info("Built tiles for: %s", ", ".join(built))
-                    tile_builder.merge_tiles()
                     if uploader:
-                        merged = data_dir / "tiles" / "merged.pmtiles"
-                        if merged.exists():
-                            uploader.upload_file(merged, "merged.pmtiles")
+                        for date_str in built:
+                            pmtiles_file = data_dir / "tiles" / f"{date_str}.pmtiles"
+                            uploader.upload_file(pmtiles_file, f"{date_str}.pmtiles")
 
-                # Prune old files
-                prune_old_files(data_dir / "deletions", retention_days)
+                # Delete geojsonl files for past days that have been tiled
+                for geojsonl in (data_dir / "deletions").glob("*.geojsonl"):
+                    date_str = geojsonl.stem
+                    if date_str == today_str:
+                        continue
+                    pmtiles_file = data_dir / "tiles" / f"{date_str}.pmtiles"
+                    if pmtiles_file.exists():
+                        geojsonl.unlink()
+                        logger.info("Cleaned up %s", geojsonl.name)
+
+                # Write and upload manifest
+                daily_tiles = sorted((data_dir / "tiles").glob("????-??-??.pmtiles"))
+                if daily_tiles:
+                    manifest = {
+                        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "files": [f.name for f in daily_tiles],
+                    }
+                    manifest_path = data_dir / "tiles" / "manifest.json"
+                    manifest_path.write_text(json.dumps(manifest))
+                    if uploader:
+                        uploader.upload_file(manifest_path, "manifest.json")
+                    logger.info("Wrote manifest with %d files", len(daily_tiles))
+
+                # Prune old pmtiles
                 prune_old_files(data_dir / "tiles", retention_days)
-
-                last_tile_build = now
             except Exception:
                 logger.exception("Failed to build/upload tiles")
 

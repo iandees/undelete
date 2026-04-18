@@ -1,7 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import patch, call
+from unittest.mock import patch
 
 from pipeline.build_tiles import TileBuilder
 
@@ -59,18 +59,3 @@ def test_skip_already_built(tmp_path):
     assert not mock_run.called
 
 
-def test_merge_tiles(tmp_path):
-    tiles_dir = tmp_path / "tiles"
-    tiles_dir.mkdir(parents=True)
-    (tiles_dir / "2025-01-13.pmtiles").write_bytes(b"fake1")
-    (tiles_dir / "2025-01-14.pmtiles").write_bytes(b"fake2")
-
-    builder = TileBuilder(tmp_path / "deletions", tiles_dir)
-
-    with patch("pipeline.build_tiles.subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        builder.merge_tiles()
-
-    assert mock_run.called
-    cmd = mock_run.call_args[0][0]
-    assert "tile-join" in cmd[0]

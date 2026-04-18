@@ -24,7 +24,7 @@ class Watcher:
 
     def get_latest_sequence(self) -> int:
         """Get the latest available sequence number from OSM replication."""
-        resp = requests.get(STATE_URL)
+        resp = requests.get(STATE_URL, timeout=30)
         resp.raise_for_status()
         for line in resp.text.strip().split("\n"):
             if line.startswith("sequenceNumber="):
@@ -46,7 +46,7 @@ class Watcher:
     def fetch_and_process(self, seq: int) -> int:
         """Fetch one adiff by sequence number, extract deletions, return count."""
         url = ADIFF_URL.format(seq=seq)
-        resp = requests.get(url, stream=True)
+        resp = requests.get(url, stream=True, timeout=60)
         if resp.status_code == 404:
             resp.close()
             return 0

@@ -55,5 +55,5 @@ if __name__ == "__main__":
     server = http.server.HTTPServer(("", port), CORSRangeHandler)
     print(f"Serving on http://localhost:{port}")
     print(f"  Map:    http://localhost:{port}/web/")
-    print(f"  Tiles:  http://localhost:{port}/data/tiles/merged.pmtiles")
+    print(f"  Tiles:  http://localhost:{port}/data/tiles/")
     server.serve_forever()

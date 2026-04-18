@@ -1,4 +1,4 @@
-"""Build PMTiles from daily GeoJSON files using tippecanoe and tile-join."""
+"""Build PMTiles from daily GeoJSON files using tippecanoe."""
 
 import logging
 import subprocess
@@ -26,20 +26,6 @@ class TileBuilder:
             self._run_tippecanoe(geojsonl_file, pmtiles_file)
             built.append(date_str)
         return built
-
-    def merge_tiles(self):
-        """Merge all daily PMTiles into a single merged.pmtiles file."""
-        daily_files = sorted(self.tiles_dir.glob("????-??-??.pmtiles"))
-        if not daily_files:
-            logger.info("No daily PMTiles files to merge")
-            return
-        merged_file = self.tiles_dir / "merged.pmtiles"
-        cmd = [
-            "tile-join", "--force", "--no-tile-size-limit",
-            "-o", str(merged_file),
-        ] + [str(f) for f in daily_files]
-        logger.info("Merging %d daily files into %s", len(daily_files), merged_file)
-        subprocess.run(cmd, check=True)
 
     def build_tiles(self, input_file: Path, output_file: Path):
         """Build PMTiles from a GeoJSON file."""

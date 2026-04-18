@@ -60,11 +60,24 @@
     .popup-actions a:hover, .popup-actions button:hover {
       background: #e0e0e0;
     }
+    #status-bar {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(255,255,255,0.9);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #555;
+      z-index: 1;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
 
 <div id="map"></div>
+<div id="status-bar"></div>
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
@@ -95,33 +108,49 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 
-// Layer colors
 const DELETE_COLOR = "#e74c3c";
 const TODAY_COLOR = "#e67e22";
+const loadedSources = new Set();
 
 map.on("load", () => {
   const base = window.location.origin;
-  addPMTilesSource(base + "/merged.pmtiles");
-  loadTodayPMTiles(base + "/today.pmtiles");
+  fetch(base + "/manifest.json")
+    .then(r => r.ok ? r.json() : null)
+    .then(manifest => {
+      if (!manifest) return;
+
+      const today = new Date().toISOString().slice(0, 10);
+      for (const file of manifest.files) {
+        const date = file.replace(".pmtiles", "");
+        const sourceId = `deletions-${date}`;
+        const color = date === today ? TODAY_COLOR : DELETE_COLOR;
+        addPMTilesSource(sourceId, `${base}/${file}`, color);
+      }
+
+      const updated = new Date(manifest.last_updated);
+      const oldest = manifest.files[0].replace(".pmtiles", "");
+      const newest = manifest.files[manifest.files.length - 1].replace(".pmtiles", "");
+      const bar = document.getElementById("status-bar");
+      bar.textContent = `Last updated: ${updated.toLocaleString()} · Data from ${oldest} to ${newest}`;
+    })
+    .catch(() => {});
 });
 
-function addPMTilesSource(url) {
-  map.addSource("deletions", {
+function addPMTilesSource(sourceId, url, color) {
+  map.addSource(sourceId, {
     type: "vector",
     url: `pmtiles://${url}`,
   });
-
-  addDeletionLayers("deletions", DELETE_COLOR);
+  loadedSources.add(sourceId);
+  addDeletionLayers(sourceId, color);
 }
 
 function addDeletionLayers(sourceId, color) {
-  const sourceLayer = "deletions";
-
   map.addLayer({
     id: sourceId + "-polygons",
     type: "fill",
     source: sourceId,
-    "source-layer": sourceLayer,
+    "source-layer": "deletions",
     filter: ["==", "$type", "Polygon"],
     paint: {
       "fill-color": color,
@@ -134,7 +163,7 @@ function addDeletionLayers(sourceId, color) {
     id: sourceId + "-lines",
     type: "line",
     source: sourceId,
-    "source-layer": sourceLayer,
+    "source-layer": "deletions",
     filter: ["==", "$type", "LineString"],
     paint: {
       "line-color": color,
@@ -146,7 +175,7 @@ function addDeletionLayers(sourceId, color) {
     id: sourceId + "-points",
     type: "circle",
     source: sourceId,
-    "source-layer": sourceLayer,
+    "source-layer": "deletions",
     filter: ["==", "$type", "Point"],
     paint: {
       "circle-radius": 5,
@@ -157,29 +186,17 @@ function addDeletionLayers(sourceId, color) {
   });
 }
 
-function loadTodayPMTiles(url) {
-  // Remove existing today layers
-  for (const layerId of ["today-points", "today-lines", "today-polygons"]) {
-    if (map.getLayer(layerId)) map.removeLayer(layerId);
+// Click handler for popups
+function getClickableLayers() {
+  const layers = [];
+  for (const sourceId of loadedSources) {
+    layers.push(sourceId + "-points", sourceId + "-lines", sourceId + "-polygons");
   }
-  if (map.getSource("today")) map.removeSource("today");
-
-  map.addSource("today", {
-    type: "vector",
-    url: `pmtiles://${url}`,
-  });
-
-  addDeletionLayers("today", TODAY_COLOR);
+  return layers;
 }
 
-// Click handler for popups
-const clickableLayers = [
-  "deletions-points", "deletions-lines", "deletions-polygons",
-  "today-points", "today-lines", "today-polygons",
-];
-
 map.on("click", (e) => {
-  const features = map.queryRenderedFeatures(e.point, { layers: clickableLayers.filter((l) => map.getLayer(l)) });
+  const features = map.queryRenderedFeatures(e.point, { layers: getClickableLayers().filter((l) => map.getLayer(l)) });
   if (features.length === 0) return;
 
   const f = features[0];
@@ -231,11 +248,16 @@ map.on("click", (e) => {
     .addTo(map);
 });
 
-// Change cursor on hover
-for (const layer of clickableLayers) {
-  map.on("mouseenter", layer, () => { if (map.getLayer(layer)) map.getCanvas().style.cursor = "pointer"; });
-  map.on("mouseleave", layer, () => { if (map.getLayer(layer)) map.getCanvas().style.cursor = ""; });
-}
+// Change cursor on hover — set up when layers are added
+const origAddLayer = map.addLayer.bind(map);
+map.addLayer = function(layerDef, ...args) {
+  origAddLayer(layerDef, ...args);
+  const id = layerDef.id;
+  if (id.endsWith("-points") || id.endsWith("-lines") || id.endsWith("-polygons")) {
+    map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+  }
+};
 
 function getFeatureCenter(feature) {
   const geom = feature.geometry;
