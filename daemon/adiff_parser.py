@@ -1,92 +1,136 @@
 """Parse augmented diff XML and extract deleted OSM objects as GeoJSON features."""
 
-from lxml import etree
+import xml.sax
+import xml.sax.handler
 
 
 def parse_adiff(source):
     """Parse augmented diff XML and yield GeoJSON features for deleted objects.
 
+    Uses SAX parsing for constant memory usage regardless of file size.
     source can be a file-like object (for streaming) or bytes.
     """
-    context = etree.iterparse(source, events=("end",), tag="action")
+    handler = _AdiffHandler()
+    # For bytes input, wrap in a BytesIO
+    if isinstance(source, bytes):
+        import io
+        source = io.BytesIO(source)
+    parser = xml.sax.make_parser()
+    parser.setContentHandler(handler)
+    parser.parse(source)
+    return handler.features
 
-    for _, action in context:
-        if action.get("type") != "delete":
-            _clear_action(action)
-            continue
 
-        old_elem = action.find("old")
-        new_elem = action.find("new")
-        if old_elem is None or new_elem is None:
-            _clear_action(action)
-            continue
+class _AdiffHandler(xml.sax.handler.ContentHandler):
+    """SAX handler that extracts deleted OSM objects from augmented diffs."""
 
-        old_obj = old_elem[0]
-        new_obj = new_elem[0]
-        obj_type = old_obj.tag
+    def __init__(self):
+        self.features = []
+        # Current action state
+        self._action_type = None
+        self._in_old = False
+        self._in_new = False
+        # Old element state
+        self._old_tag = None
+        self._old_attrs = {}
+        self._old_tags = {}
+        self._old_nds = []
+        self._old_bounds = None
+        # New element state
+        self._new_attrs = {}
 
-        tags = {tag.get("k"): tag.get("v") for tag in old_obj.iterchildren("tag")}
+    def startElement(self, name, attrs):
+        if name == "action":
+            self._action_type = attrs.get("type")
+            self._in_old = False
+            self._in_new = False
+            self._old_tag = None
+            self._old_attrs = {}
+            self._old_tags = {}
+            self._old_nds = []
+            self._old_bounds = None
+            self._new_attrs = {}
+        elif name == "old":
+            self._in_old = True
+        elif name == "new":
+            self._in_new = True
+            self._in_old = False
+        elif self._action_type == "delete":
+            if self._in_old:
+                if name in ("node", "way", "relation"):
+                    self._old_tag = name
+                    self._old_attrs = dict(attrs)
+                elif name == "tag":
+                    self._old_tags[attrs.get("k")] = attrs.get("v")
+                elif name == "nd":
+                    self._old_nds.append(dict(attrs))
+                elif name == "bounds":
+                    self._old_bounds = dict(attrs)
+            elif self._in_new:
+                if name in ("node", "way", "relation"):
+                    self._new_attrs = dict(attrs)
 
-        geometry = _extract_geometry(obj_type, old_obj)
+    def endElement(self, name):
+        if name == "old":
+            self._in_old = False
+        elif name == "new":
+            self._in_new = False
+        elif name == "action":
+            if self._action_type == "delete" and self._old_tag:
+                self._emit_feature()
+            self._action_type = None
+
+    def _emit_feature(self):
+        geometry = self._extract_geometry()
         if geometry is None:
-            _clear_action(action)
-            continue
+            return
 
         feature = {
             "type": "Feature",
             "geometry": geometry,
             "properties": {
-                "osm_type": obj_type,
-                "osm_id": int(old_obj.get("id")),
-                "version": int(old_obj.get("version")),
-                "tags": tags,
-                "deleted_by": new_obj.get("user", ""),
-                "deleted_uid": int(new_obj.get("uid", 0)),
-                "deleted_changeset": int(new_obj.get("changeset", 0)),
-                "deleted_at": new_obj.get("timestamp", ""),
+                "osm_type": self._old_tag,
+                "osm_id": int(self._old_attrs.get("id", 0)),
+                "version": int(self._old_attrs.get("version", 0)),
+                "tags": self._old_tags,
+                "deleted_by": self._new_attrs.get("user", ""),
+                "deleted_uid": int(self._new_attrs.get("uid", 0)),
+                "deleted_changeset": int(self._new_attrs.get("changeset", 0)),
+                "deleted_at": self._new_attrs.get("timestamp", ""),
             },
         }
-        _clear_action(action)
-        yield feature
+        self.features.append(feature)
 
+    def _extract_geometry(self):
+        if self._old_tag == "node":
+            lon = self._old_attrs.get("lon")
+            lat = self._old_attrs.get("lat")
+            if lon is None or lat is None:
+                return None
+            return {"type": "Point", "coordinates": [float(lon), float(lat)]}
 
-def _clear_action(action):
-    """Clear element data and detach from parent to free memory during iterparse."""
-    parent = action.getparent()
-    action.clear()
-    if parent is not None:
-        parent.remove(action)
+        elif self._old_tag == "way":
+            if not self._old_nds:
+                return None
+            coords = [
+                [float(nd.get("lon")), float(nd.get("lat"))]
+                for nd in self._old_nds
+            ]
+            nds = self._old_nds
+            if len(nds) >= 4 and nds[0].get("ref") == nds[-1].get("ref"):
+                return {"type": "Polygon", "coordinates": [coords]}
+            else:
+                return {"type": "LineString", "coordinates": coords}
 
-
-def _extract_geometry(obj_type, elem):
-    """Extract GeoJSON geometry from an OSM element."""
-    if obj_type == "node":
-        lon = elem.get("lon")
-        lat = elem.get("lat")
-        if lon is None or lat is None:
+        elif self._old_tag == "relation":
+            if self._old_bounds:
+                min_lon = float(self._old_bounds.get("minlon"))
+                max_lon = float(self._old_bounds.get("maxlon"))
+                min_lat = float(self._old_bounds.get("minlat"))
+                max_lat = float(self._old_bounds.get("maxlat"))
+                center_lon = (min_lon + max_lon) / 2
+                center_lat = (min_lat + max_lat) / 2
+                return {"type": "Point", "coordinates": [center_lon, center_lat]}
             return None
-        return {"type": "Point", "coordinates": [float(lon), float(lat)]}
 
-    elif obj_type == "way":
-        nds = elem.findall("nd")
-        if not nds:
-            return None
-        coords = [[float(nd.get("lon")), float(nd.get("lat"))] for nd in nds]
-        if len(nds) >= 4 and nds[0].get("ref") == nds[-1].get("ref"):
-            return {"type": "Polygon", "coordinates": [coords]}
-        else:
-            return {"type": "LineString", "coordinates": coords}
-
-    elif obj_type == "relation":
-        bounds = elem.find("bounds")
-        if bounds is not None:
-            min_lon = float(bounds.get("minlon"))
-            max_lon = float(bounds.get("maxlon"))
-            min_lat = float(bounds.get("minlat"))
-            max_lat = float(bounds.get("maxlat"))
-            center_lon = (min_lon + max_lon) / 2
-            center_lat = (min_lat + max_lat) / 2
-            return {"type": "Point", "coordinates": [center_lon, center_lat]}
         return None
-
-    return None
