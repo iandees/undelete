@@ -221,7 +221,8 @@ map.on("click", (e) => {
   html += `<div class="popup-actions">`;
   html += `<a href="https://www.openstreetmap.org/${osmType}/${osmId}/history" target="_blank">History</a>`;
   html += `<a href="${josmUrl}" target="_blank">Open in JOSM</a>`;
-  html += `<button onclick="downloadOsm('${osmType}', ${osmId}, ${JSON.stringify(JSON.stringify(tags))}, ${JSON.stringify(JSON.stringify(f.geometry))})">Download .osm</button>`;
+  const osmVersion = props.version;
+  html += `<button onclick="downloadOsm('${osmType}', ${osmId}, ${osmVersion})">Download .osm</button>`;
   html += `</div>`;
 
   new maplibregl.Popup()
@@ -256,49 +257,90 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function downloadOsm(osmType, osmId, tagsJson, geomJson) {
-  const tags = JSON.parse(tagsJson);
-  const geom = JSON.parse(geomJson);
+const OSM_API = "https://api.openstreetmap.org/api/0.6";
 
-  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-  xml += '<osm version="0.6" generator="osm-undelete">\n';
+async function downloadOsm(osmType, osmId, version) {
+  try {
+    const resp = await fetch(`${OSM_API}/${osmType}/${osmId}/${version}`);
+    if (!resp.ok) throw new Error(`Failed to fetch ${osmType}/${osmId}/${version}: ${resp.status}`);
+    const text = await resp.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, "text/xml");
 
-  if (osmType === "node") {
-    xml += `  <node id="-1" lon="${geom.coordinates[0]}" lat="${geom.coordinates[1]}" version="1">\n`;
-    for (const [k, v] of Object.entries(tags)) {
-      xml += `    <tag k="${escapeXml(k)}" v="${escapeXml(v)}"/>\n`;
+    // Collect all elements for the final document
+    const nodes = new Map();  // id -> XML string
+    const ways = new Map();
+    const relations = new Map();
+
+    if (osmType === "node") {
+      const node = doc.querySelector("node");
+      nodes.set(osmId, new XMLSerializer().serializeToString(node));
+    } else if (osmType === "way") {
+      const way = doc.querySelector("way");
+      // Fetch all referenced nodes
+      const ndRefs = Array.from(way.querySelectorAll("nd")).map(nd => nd.getAttribute("ref"));
+      const nodeResults = await Promise.all(
+        ndRefs.map(ref => fetch(`${OSM_API}/node/${ref}`).then(r => r.ok ? r.text() : null))
+      );
+      for (const nodeText of nodeResults) {
+        if (!nodeText) continue;
+        const nodeDoc = parser.parseFromString(nodeText, "text/xml");
+        const node = nodeDoc.querySelector("node");
+        if (node) nodes.set(node.getAttribute("id"), new XMLSerializer().serializeToString(node));
+      }
+      ways.set(String(osmId), new XMLSerializer().serializeToString(way));
+    } else if (osmType === "relation") {
+      const rel = doc.querySelector("relation");
+      const members = Array.from(rel.querySelectorAll("member"));
+      // Fetch member nodes and ways (with their nodes)
+      const fetches = members.map(async (member) => {
+        const type = member.getAttribute("type");
+        const ref = member.getAttribute("ref");
+        const r = await fetch(`${OSM_API}/${type}/${ref}`);
+        if (!r.ok) return;
+        const t = await r.text();
+        const d = parser.parseFromString(t, "text/xml");
+        if (type === "node") {
+          const node = d.querySelector("node");
+          if (node) nodes.set(ref, new XMLSerializer().serializeToString(node));
+        } else if (type === "way") {
+          const way = d.querySelector("way");
+          if (!way) return;
+          ways.set(ref, new XMLSerializer().serializeToString(way));
+          // Fetch the way's nodes too
+          const ndRefs = Array.from(way.querySelectorAll("nd")).map(nd => nd.getAttribute("ref"));
+          const nodeResults = await Promise.all(
+            ndRefs.map(nref => fetch(`${OSM_API}/node/${nref}`).then(nr => nr.ok ? nr.text() : null))
+          );
+          for (const nodeText of nodeResults) {
+            if (!nodeText) continue;
+            const nd = parser.parseFromString(nodeText, "text/xml");
+            const node = nd.querySelector("node");
+            if (node) nodes.set(node.getAttribute("id"), new XMLSerializer().serializeToString(node));
+          }
+        }
+      });
+      await Promise.all(fetches);
+      relations.set(String(osmId), new XMLSerializer().serializeToString(rel));
     }
-    xml += `  </node>\n`;
-  } else if (osmType === "way") {
-    const coords = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates;
-    let nodeId = -1;
-    for (const c of coords) {
-      xml += `  <node id="${nodeId}" lon="${c[0]}" lat="${c[1]}" version="1"/>\n`;
-      nodeId--;
-    }
-    xml += `  <way id="-1" version="1">\n`;
-    for (let i = -1; i > nodeId; i--) {
-      xml += `    <nd ref="${i}"/>\n`;
-    }
-    for (const [k, v] of Object.entries(tags)) {
-      xml += `    <tag k="${escapeXml(k)}" v="${escapeXml(v)}"/>\n`;
-    }
-    xml += `  </way>\n`;
+
+    // Build the combined .osm XML
+    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="osm-undelete">\n';
+    for (const s of nodes.values()) xml += "  " + s + "\n";
+    for (const s of ways.values()) xml += "  " + s + "\n";
+    for (const s of relations.values()) xml += "  " + s + "\n";
+    xml += "</osm>\n";
+
+    const blob = new Blob([xml], { type: "application/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${osmType}-${osmId}.osm`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Failed to download: " + err.message);
   }
-
-  xml += '</osm>';
-
-  const blob = new Blob([xml], { type: "application/xml" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${osmType}-${osmId}.osm`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function escapeXml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 </script>
