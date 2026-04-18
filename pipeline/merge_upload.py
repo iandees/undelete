@@ -1,0 +1,36 @@
+"""Upload PMTiles and GeoJSON to Cloudflare R2."""
+
+import json
+import logging
+from pathlib import Path
+
+import boto3
+
+logger = logging.getLogger(__name__)
+
+
+class R2Uploader:
+    def __init__(self, endpoint_url: str, access_key_id: str, secret_access_key: str, bucket_name: str):
+        self.bucket_name = bucket_name
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+        )
+
+    def upload_file(self, local_path: Path, remote_key: str):
+        """Upload a file to R2."""
+        logger.info("Uploading %s -> s3://%s/%s", local_path, self.bucket_name, remote_key)
+        self.client.upload_file(str(local_path), self.bucket_name, remote_key)
+
+    def upload_today_geojson(self, feature_collection: dict):
+        """Upload today's GeoJSON FeatureCollection to R2."""
+        body = json.dumps(feature_collection, separators=(",", ":"))
+        self.client.put_object(
+            Bucket=self.bucket_name,
+            Key="today.geojson",
+            Body=body,
+            ContentType="application/geo+json",
+        )
+        logger.info("Uploaded today.geojson (%d features)", len(feature_collection["features"]))
