@@ -1,0 +1,8 @@
+services:
+  undelete:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
