@@ -43,13 +43,17 @@ class Watcher:
         state_file = self.state_dir / "last_seq.txt"
         state_file.write_text(str(seq))
 
-    def fetch_and_process(self, seq: int) -> int:
-        """Fetch one adiff by sequence number, extract deletions, return count."""
+    def fetch_and_process(self, seq: int) -> int | None:
+        """Fetch one adiff by sequence number, extract deletions.
+
+        Returns the number of deletions found, or None if the adiff
+        is not yet available (404).
+        """
         url = ADIFF_URL.format(seq=seq)
         resp = requests.get(url, stream=True, timeout=60)
         if resp.status_code == 404:
             resp.close()
-            return 0
+            return None
         resp.raise_for_status()
         resp.raw.decode_content = True
 

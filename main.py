@@ -96,6 +96,9 @@ def main():
             try:
                 logger.debug("Fetching and processing seq %d (latest=%d)", next_seq, latest_seq)
                 count = watcher.fetch_and_process(next_seq)
+                if count is None:
+                    logger.debug("Seq %d not yet available (404), will retry", next_seq)
+                    break
                 logger.debug("Processed seq %d: %d deletions", next_seq, count)
                 if count > 0:
                     logger.info("Seq %d: %d deletions", next_seq, count)
