@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
 
-import geopandas as gpd
-import shapely.wkb
+import pyarrow as pa
+import pyarrow.parquet as pq
+import shapely
 
 from pipeline.build_parquet import ParquetBuilder
 
@@ -56,12 +57,33 @@ def test_build_parquet_from_geojsonl(tmp_path):
     parquet_path = parquet_dir / "date=2025-01-01" / "data.parquet"
     assert parquet_path.exists()
 
-    gdf = gpd.read_parquet(parquet_path)
-    assert len(gdf) == 3
-    assert list(gdf["action"]) == ["create", "modify", "delete"]
-    assert gdf.crs.to_epsg() == 4326
-    # geometry column should be valid shapely geometries
-    assert all(gdf.geometry.is_valid)
+    table = pq.read_table(parquet_path)
+    assert table.num_rows == 3
+    assert set(table.column("action").to_pylist()) == {"create", "modify", "delete"}
+
+    # Verify GeoParquet metadata
+    geo_meta = json.loads(table.schema.metadata[b"geo"])
+    assert geo_meta["version"] == "1.1.0"
+    assert geo_meta["primary_column"] == "geometry"
+    assert "covering" in geo_meta["columns"]["geometry"]
+
+    # Verify tags are MAP type
+    tags_col = table.column("tags")
+    assert tags_col.type == pa.map_(pa.string(), pa.string())
+    # The modify row has tags {"name": "Foo"}
+    tag_maps = tags_col.to_pylist()
+    assert any(("name", "Foo") in items for items in tag_maps)
+
+    # Verify geometry is valid WKB
+    for wkb_bytes in table.column("geometry").to_pylist():
+        geom = shapely.from_wkb(wkb_bytes)
+        assert geom.is_valid
+
+    # Verify bbox column exists
+    assert "bbox" in table.schema.names
+    bbox_col = table.column("bbox").to_pylist()
+    for bbox in bbox_col:
+        assert "xmin" in bbox and "ymin" in bbox
 
 
 def test_build_skips_if_unchanged(tmp_path):
@@ -104,10 +126,30 @@ def test_old_geometry_preserved(tmp_path):
     builder = ParquetBuilder(geojsonl_dir, parquet_dir)
     builder.build("2025-01-01")
 
-    gdf = gpd.read_parquet(parquet_dir / "date=2025-01-01" / "data.parquet")
-    assert len(gdf) == 1
-    old_geom_wkb = gdf.iloc[0]["old_geometry"]
+    table = pq.read_table(parquet_dir / "date=2025-01-01" / "data.parquet")
+    assert table.num_rows == 1
+    old_geom_wkb = table.column("old_geometry").to_pylist()[0]
     assert old_geom_wkb is not None
-    restored = shapely.wkb.loads(old_geom_wkb)
+    restored = shapely.from_wkb(old_geom_wkb)
     assert restored.x == -78.0
     assert restored.y == 37.0
+
+
+def test_tags_as_map(tmp_path):
+    geojsonl_dir = tmp_path / "geojsonl"
+    geojsonl_dir.mkdir()
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir()
+
+    feat = _make_feature("create", "node", 1, -77.0, 38.9,
+                         tags={"building": "yes", "name": "Test Building"})
+    geojsonl_file = geojsonl_dir / "2025-01-01.geojsonl"
+    geojsonl_file.write_text(json.dumps(feat))
+
+    builder = ParquetBuilder(geojsonl_dir, parquet_dir)
+    builder.build("2025-01-01")
+
+    table = pq.read_table(parquet_dir / "date=2025-01-01" / "data.parquet")
+    tag_map = table.column("tags").to_pylist()[0]
+    assert ("building", "yes") in tag_map
+    assert ("name", "Test Building") in tag_map
