@@ -10,7 +10,20 @@ from pathlib import Path
 mimetypes.add_type("application/octet-stream", ".parquet")
 
 
+PATH_ALIASES = {
+    "/osm-changes/": "/data/parquet/",
+    "/osm-changesets/": "/data/changeset_parquet/",
+}
+
+
 class CORSRangeHandler(http.server.SimpleHTTPRequestHandler):
+    def translate_path(self, path):
+        for alias, target in PATH_ALIASES.items():
+            if path.startswith(alias):
+                path = target + path[len(alias):]
+                break
+        return super().translate_path(path)
+
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Range")
