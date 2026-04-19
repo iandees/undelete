@@ -225,6 +225,12 @@ def test_e2e_default_output():
 
 # --- Negative number support ---
 
+def test_tag_value_with_single_quote():
+    sql = overpass_to_sql('''node["name"="O'Brien"];''')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'name')[1] = 'O''Brien'" in normed
+
+
 def test_bbox_negative_coords():
     sql = overpass_to_sql('node(-33.9,-18.5,-33.8,-18.4);')
     normed = _normalize(sql)
