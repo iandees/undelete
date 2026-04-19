@@ -141,23 +141,29 @@ def _select_clause(output_mode: str) -> str:
             return "SELECT *"
 
 
+def _sql_str(s: str) -> str:
+    return s.replace("'", "''")
+
+
 def _tag_filter_sql(tf: TagFilter) -> str:
+    key = _sql_str(tf.key)
+    val = _sql_str(tf.value)
     match tf.op:
         case "exists":
-            return f"map_contains(tags, '{tf.key}')"
+            return f"map_contains(tags, '{key}')"
         case "=":
-            return f"element_at(tags, '{tf.key}')[1] = '{tf.value}'"
+            return f"element_at(tags, '{key}')[1] = '{val}'"
         case "!=":
             return (
-                f"(NOT map_contains(tags, '{tf.key}') "
-                f"OR element_at(tags, '{tf.key}')[1] != '{tf.value}')"
+                f"(NOT map_contains(tags, '{key}') "
+                f"OR element_at(tags, '{key}')[1] != '{val}')"
             )
         case "~":
-            pattern = f"(?i){tf.value}" if tf.case_insensitive else tf.value
-            return f"regexp_matches(element_at(tags, '{tf.key}')[1], '{pattern}')"
+            pattern = f"(?i){val}" if tf.case_insensitive else val
+            return f"regexp_matches(element_at(tags, '{key}')[1], '{pattern}')"
         case "!~":
-            pattern = f"(?i){tf.value}" if tf.case_insensitive else tf.value
-            return f"NOT regexp_matches(element_at(tags, '{tf.key}')[1], '{pattern}')"
+            pattern = f"(?i){val}" if tf.case_insensitive else val
+            return f"NOT regexp_matches(element_at(tags, '{key}')[1], '{pattern}')"
         case _:
             raise OverpassParseError(f"Unknown tag filter operator: {tf.op}")
 
@@ -171,6 +177,8 @@ def _geo_filter_sql(gf: BboxFilter | AroundFilter) -> str:
     elif isinstance(gf, AroundFilter):
         deg = gf.radius / 111320.0
         return f"ST_DWithin(geometry, ST_Point({gf.lon}, {gf.lat}), {deg})"
+    else:
+        raise OverpassParseError(f"Unknown geo filter type: {type(gf)}")
 
 
 def _statement_sql(stmt: Statement, select: str) -> str:
