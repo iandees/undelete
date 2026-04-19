@@ -365,6 +365,10 @@ async function loadMetadata() {
   const dates = (metadata && metadata.dates) || [];
   const latest = dates.length ? dates[dates.length - 1] : null;
   const csDates = (changesetMetadata && changesetMetadata.dates) || [];
+
+  // Create DuckDB views covering all dates
+  await createViews(dates, csDates);
+
   let statusParts = [];
   if (dates.length) statusParts.push(`${dates.length} element dates`);
   if (csDates.length) statusParts.push(`${csDates.length} changeset dates`);
@@ -378,7 +382,27 @@ async function loadMetadata() {
     document.getElementById("query-editor").value = buildDefaultQuery(latest);
   } else {
     document.getElementById("query-editor").value =
-      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
+      "-- No data found yet. Use read_parquet() with a URL, or wait for data.\nSELECT 1";
+  }
+}
+
+async function createViews(dates, csDates) {
+  if (!conn) return;
+  try {
+    if (dates.length > 0) {
+      const urls = dates.map(d => parquetUrl(d));
+      const urlList = urls.map(u => `'${u}'`).join(", ");
+      await conn.query(`CREATE OR REPLACE VIEW changesets AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
+      console.log("Created 'changesets' view with", dates.length, "dates");
+    }
+    if (csDates.length > 0) {
+      const urls = csDates.map(d => changesetParquetUrl(d));
+      const urlList = urls.map(u => `'${u}'`).join(", ");
+      await conn.query(`CREATE OR REPLACE VIEW changeset_info AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
+      console.log("Created 'changeset_info' view with", csDates.length, "dates");
+    }
+  } catch (e) {
+    console.warn("Failed to create views:", e);
   }
 }
 
@@ -391,7 +415,7 @@ function changesetParquetUrl(datePattern) {
 }
 
 function buildDefaultQuery(date) {
-  return `SELECT * FROM read_parquet('${parquetUrl(date)}') LIMIT 100`;
+  return `SELECT * FROM changesets\nWHERE date = '${date}'\nLIMIT 100`;
 }
 
 // =========================================================
@@ -399,60 +423,47 @@ function buildDefaultQuery(date) {
 // =========================================================
 function buildExamples(latestDate) {
   const d = latestDate || "2025-01-01";
-  const dayUrl = parquetUrl(d);
-
-  // Build a list of all date URLs for multi-date queries
-  const allDateUrls = (metadata && metadata.dates)
-    ? metadata.dates.map(dt => parquetUrl(dt))
-    : [dayUrl];
-  const allUrlList = allDateUrls.map(u => `'${u}'`).join(",\n    ");
-
-  const csDayUrl = changesetParquetUrl(d);
-  const csAllDateUrls = (changesetMetadata && changesetMetadata.dates)
-    ? changesetMetadata.dates.map(dt => changesetParquetUrl(dt))
-    : [csDayUrl];
-  const csAllUrlList = csAllDateUrls.map(u => `'${u}'`).join(",\n    ");
 
   window._examples = [
     {
-      label: "Today's changes (sample)",
+      label: "Today's changesets (sample)",
       desc: "First 100 rows from the latest date",
-      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nLIMIT 100`,
+      sql: `SELECT * FROM changesets\nWHERE date = '${d}'\nLIMIT 100`,
     },
     {
       label: "Today's deletes",
       desc: "All delete actions from the latest date",
-      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nWHERE action = 'delete'`,
+      sql: `SELECT * FROM changesets\nWHERE date = '${d}'\n  AND action = 'delete'`,
     },
     {
       label: "Changes by user",
       desc: "Count of changes grouped by user and action",
-      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM read_parquet('${dayUrl}')\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50`,
+      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM changesets\nWHERE date = '${d}'\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50`,
     },
     {
       label: "Deleted buildings (all dates)",
       desc: "Buildings deleted across all available dates",
-      sql: `SELECT *\nFROM read_parquet([\n    ${allUrlList}\n])\nWHERE action = 'delete'\n  AND map_contains(tags, 'building')\nLIMIT 200`,
+      sql: `SELECT * FROM changesets\nWHERE action = 'delete'\n  AND map_contains(tags, 'building')\nLIMIT 200`,
     },
     {
       label: "Tag search (example: amenity=cafe)",
       desc: "Find changes to features with a specific tag value",
-      sql: `-- tags is a MAP column\n-- map_contains(tags, 'key') checks if a key exists\n-- element_at(tags, 'key')[1] gets the value\nSELECT osm_type, osm_id, action, "user", timestamp,\n  element_at(tags, 'amenity')[1] AS amenity,\n  element_at(tags, 'name')[1] AS name,\n  geometry\nFROM read_parquet('${dayUrl}')\nWHERE element_at(tags, 'amenity')[1] = 'cafe'\nLIMIT 200`,
+      sql: `-- tags is a MAP column\n-- map_contains(tags, 'key') checks if a key exists\n-- element_at(tags, 'key')[1] gets the value\nSELECT osm_type, osm_id, action, "user", timestamp, date,\n  element_at(tags, 'amenity')[1] AS amenity,\n  element_at(tags, 'name')[1] AS name,\n  geometry\nFROM changesets\nWHERE element_at(tags, 'amenity')[1] = 'cafe'\nLIMIT 200`,
     },
     {
-      label: "Changesets (sample)",
-      desc: "Recent changesets with their tags and bbox",
-      sql: `SELECT id, "user", created_at, closed_at, num_changes, comments_count,\n  element_at(tags, 'comment')[1] AS comment,\n  element_at(tags, 'created_by')[1] AS created_by,\n  geometry\nFROM read_parquet('${csDayUrl}')\nORDER BY num_changes DESC\nLIMIT 100`,
+      label: "Changeset info (sample)",
+      desc: "Recent changeset metadata with tags and bbox",
+      sql: `SELECT id, "user", created_at, closed_at, num_changes, comments_count,\n  element_at(tags, 'comment')[1] AS comment,\n  element_at(tags, 'created_by')[1] AS created_by,\n  geometry\nFROM changeset_info\nWHERE date = '${d}'\nORDER BY num_changes DESC\nLIMIT 100`,
     },
     {
-      label: "Changesets by editor",
+      label: "Changeset info by editor",
       desc: "Count changesets grouped by editor (created_by tag)",
-      sql: `SELECT element_at(tags, 'created_by')[1] AS editor,\n  COUNT(*) AS cnt,\n  SUM(num_changes) AS total_changes\nFROM read_parquet('${csDayUrl}')\nGROUP BY editor\nORDER BY cnt DESC\nLIMIT 50`,
+      sql: `SELECT element_at(tags, 'created_by')[1] AS editor,\n  COUNT(*) AS cnt,\n  SUM(num_changes) AS total_changes\nFROM changeset_info\nWHERE date = '${d}'\nGROUP BY editor\nORDER BY cnt DESC\nLIMIT 50`,
     },
     {
       label: "Large changesets",
       desc: "Changesets with the most element changes",
-      sql: `SELECT id, "user", created_at, num_changes,\n  element_at(tags, 'comment')[1] AS comment,\n  geometry\nFROM read_parquet('${csDayUrl}')\nWHERE num_changes > 100\nORDER BY num_changes DESC\nLIMIT 100`,
+      sql: `SELECT id, "user", created_at, num_changes,\n  element_at(tags, 'comment')[1] AS comment,\n  geometry\nFROM changeset_info\nWHERE num_changes > 100\nORDER BY num_changes DESC\nLIMIT 100`,
     },
   ];
 
