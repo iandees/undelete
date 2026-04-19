@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="replicate_changesets.rb">
+  <changeset id="12345" created_at="2025-01-15T10:00:00Z" closed_at="2025-01-15T10:30:00Z" open="false" num_changes="42" user="testuser" uid="1001" min_lat="48.0" max_lat="48.5" min_lon="2.0" max_lon="2.5" comments_count="1">
+    <tag k="comment" v="Adding buildings"/>
+    <tag k="created_by" v="JOSM/1.5"/>
+    <tag k="source" v="survey"/>
+  </changeset>
+  <changeset id="12346" created_at="2025-01-15T10:05:00Z" closed_at="2025-01-15T10:35:00Z" open="false" num_changes="3" user="anotheruser" uid="2002" min_lat="35.0" max_lat="35.1" min_lon="139.0" max_lon="139.1" comments_count="0">
+    <tag k="comment" v="Fix road alignment"/>
+    <tag k="created_by" v="iD"/>
+  </changeset>
+  <changeset id="12347" created_at="2025-01-15T10:10:00Z" open="true" num_changes="0" user="newuser" uid="3003" comments_count="0">
+  </changeset>
+</osm>

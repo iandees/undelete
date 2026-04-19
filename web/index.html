@@ -280,6 +280,8 @@ let currentResults = []; // array of row objects
 let currentGeoJSON = null; // FeatureCollection
 let highlightedRowIdx = null;
 let currentPopup = null;
+let changesetMetadata = null;
+let baseChangesetParquetUrl = null;
 
 const map = new maplibregl.Map({
   container: "map",
@@ -332,6 +334,7 @@ async function initDuckDB() {
 }
 
 async function loadMetadata() {
+  // Load element changes metadata
   try {
     const resp = await fetch("/data/parquet/metadata.json");
     if (!resp.ok) throw new Error("not found");
@@ -341,31 +344,50 @@ async function loadMetadata() {
     } else {
       baseParquetUrl = window.location.origin + "/data/parquet";
     }
-    const dates = metadata.dates || [];
-    const latest = dates.length ? dates[dates.length - 1] : null;
-    setStatus(`DuckDB ready | ${dates.length} dates available${latest ? " (latest: " + latest + ")" : ""}`);
-    buildExamples(latest);
-    const saved = localStorage.getItem("osm-changes-query");
-    if (saved) {
-      document.getElementById("query-editor").value = saved;
-    } else if (latest) {
-      document.getElementById("query-editor").value = buildDefaultQuery(latest);
+  } catch {
+    baseParquetUrl = window.location.origin + "/data/parquet";
+  }
+
+  // Load changeset metadata
+  try {
+    const resp = await fetch("/data/changeset_parquet/metadata.json");
+    if (!resp.ok) throw new Error("not found");
+    changesetMetadata = await resp.json();
+    if (changesetMetadata.base_url) {
+      baseChangesetParquetUrl = changesetMetadata.base_url + "/osm-changesets";
+    } else {
+      baseChangesetParquetUrl = window.location.origin + "/data/changeset_parquet";
     }
   } catch {
-    // No metadata — use manual URL
-    baseParquetUrl = window.location.origin + "/data/parquet";
-    buildExamples(null);
-    const saved = localStorage.getItem("osm-changes-query");
-    if (!saved) {
-      document.getElementById("query-editor").value =
-        "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
-    }
-    setStatus("DuckDB ready | No metadata found, use manual URLs");
+    baseChangesetParquetUrl = window.location.origin + "/data/changeset_parquet";
+  }
+
+  const dates = (metadata && metadata.dates) || [];
+  const latest = dates.length ? dates[dates.length - 1] : null;
+  const csDates = (changesetMetadata && changesetMetadata.dates) || [];
+  let statusParts = [];
+  if (dates.length) statusParts.push(`${dates.length} element dates`);
+  if (csDates.length) statusParts.push(`${csDates.length} changeset dates`);
+  setStatus(`DuckDB ready | ${statusParts.join(", ") || "No data found"}${latest ? " (latest: " + latest + ")" : ""}`);
+
+  buildExamples(latest);
+  const saved = localStorage.getItem("osm-changes-query");
+  if (saved) {
+    document.getElementById("query-editor").value = saved;
+  } else if (latest) {
+    document.getElementById("query-editor").value = buildDefaultQuery(latest);
+  } else {
+    document.getElementById("query-editor").value =
+      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
   }
 }
 
 function parquetUrl(datePattern) {
   return baseParquetUrl + "/date=" + datePattern + "/data.parquet";
+}
+
+function changesetParquetUrl(datePattern) {
+  return baseChangesetParquetUrl + "/date=" + datePattern + "/data.parquet";
 }
 
 function buildDefaultQuery(date) {
@@ -384,6 +406,12 @@ function buildExamples(latestDate) {
     ? metadata.dates.map(dt => parquetUrl(dt))
     : [dayUrl];
   const allUrlList = allDateUrls.map(u => `'${u}'`).join(",\n    ");
+
+  const csDayUrl = changesetParquetUrl(d);
+  const csAllDateUrls = (changesetMetadata && changesetMetadata.dates)
+    ? changesetMetadata.dates.map(dt => changesetParquetUrl(dt))
+    : [csDayUrl];
+  const csAllUrlList = csAllDateUrls.map(u => `'${u}'`).join(",\n    ");
 
   window._examples = [
     {
@@ -410,6 +438,21 @@ function buildExamples(latestDate) {
       label: "Tag search (example: amenity=cafe)",
       desc: "Find changes to features with a specific tag value",
       sql: `-- tags is a MAP column\n-- map_contains(tags, 'key') checks if a key exists\n-- element_at(tags, 'key')[1] gets the value\nSELECT osm_type, osm_id, action, "user", timestamp,\n  element_at(tags, 'amenity')[1] AS amenity,\n  element_at(tags, 'name')[1] AS name,\n  geometry\nFROM read_parquet('${dayUrl}')\nWHERE element_at(tags, 'amenity')[1] = 'cafe'\nLIMIT 200`,
+    },
+    {
+      label: "Changesets (sample)",
+      desc: "Recent changesets with their tags and bbox",
+      sql: `SELECT id, "user", created_at, closed_at, num_changes, comments_count,\n  element_at(tags, 'comment')[1] AS comment,\n  element_at(tags, 'created_by')[1] AS created_by,\n  geometry\nFROM read_parquet('${csDayUrl}')\nORDER BY num_changes DESC\nLIMIT 100`,
+    },
+    {
+      label: "Changesets by editor",
+      desc: "Count changesets grouped by editor (created_by tag)",
+      sql: `SELECT element_at(tags, 'created_by')[1] AS editor,\n  COUNT(*) AS cnt,\n  SUM(num_changes) AS total_changes\nFROM read_parquet('${csDayUrl}')\nGROUP BY editor\nORDER BY cnt DESC\nLIMIT 50`,
+    },
+    {
+      label: "Large changesets",
+      desc: "Changesets with the most element changes",
+      sql: `SELECT id, "user", created_at, num_changes,\n  element_at(tags, 'comment')[1] AS comment,\n  geometry\nFROM read_parquet('${csDayUrl}')\nWHERE num_changes > 100\nORDER BY num_changes DESC\nLIMIT 100`,
     },
   ];
 

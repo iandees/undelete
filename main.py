@@ -13,7 +13,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from daemon.changeset_watcher import ChangesetWatcher
 from daemon.watcher import Watcher
+from pipeline.build_changeset_parquet import ChangesetParquetBuilder
 from pipeline.build_parquet import ParquetBuilder
 from pipeline.merge_upload import R2Uploader
 from pipeline.prune import prune_old_files
@@ -30,9 +32,10 @@ logger.setLevel(logging.DEBUG)
 POLL_INTERVAL = 60
 
 
-def write_and_upload_metadata(data_dir: Path, uploader: R2Uploader | None, r2_public_url: str):
+def write_and_upload_metadata(
+    parquet_dir: Path, uploader: R2Uploader | None, r2_public_url: str, r2_prefix: str,
+):
     """Write metadata.json with available date range and upload it."""
-    parquet_dir = data_dir / "parquet"
     if not parquet_dir.exists():
         return
     date_dirs = sorted(
@@ -53,8 +56,8 @@ def write_and_upload_metadata(data_dir: Path, uploader: R2Uploader | None, r2_pu
     metadata_path = parquet_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata))
     if uploader:
-        uploader.upload_file(metadata_path, "osm-changes/metadata.json")
-    logger.info("Wrote metadata: %s to %s (%d dates)", date_dirs[0], date_dirs[-1], len(date_dirs))
+        uploader.upload_file(metadata_path, f"{r2_prefix}/metadata.json")
+    logger.info("Wrote %s metadata: %s to %s (%d dates)", r2_prefix, date_dirs[0], date_dirs[-1], len(date_dirs))
 
 
 def main():
@@ -62,6 +65,9 @@ def main():
 
     watcher = Watcher(data_dir)
     parquet_builder = ParquetBuilder(data_dir / "deletions", data_dir / "parquet")
+
+    cs_watcher = ChangesetWatcher(data_dir)
+    cs_parquet_builder = ChangesetParquetBuilder(data_dir / "changesets", data_dir / "changeset_parquet")
 
     uploader = None
     r2_endpoint = os.environ.get("R2_ENDPOINT_URL")
@@ -86,6 +92,13 @@ def main():
         logger.info("No saved state, starting from latest sequence: %d", last_seq)
     else:
         logger.info("Resuming from saved sequence: %d", last_seq)
+
+    cs_last_seq = cs_watcher.load_state()
+    if cs_last_seq is None:
+        cs_last_seq = cs_watcher.get_latest_sequence()
+        logger.info("No saved changeset state, starting from latest sequence: %d", cs_last_seq)
+    else:
+        logger.info("Resuming changesets from saved sequence: %d", cs_last_seq)
 
     last_parquet_build = 0.0
 
@@ -124,11 +137,33 @@ def main():
                 logger.exception("Failed to process seq %d", next_seq)
                 break
 
+        # Fetch changeset replication
+        try:
+            cs_latest_seq = cs_watcher.get_latest_sequence()
+        except Exception:
+            logger.exception("Failed to get latest changeset sequence")
+            cs_latest_seq = cs_last_seq
+
+        while cs_last_seq < cs_latest_seq:
+            cs_next_seq = cs_last_seq + 1
+            try:
+                count = cs_watcher.fetch_and_process(cs_next_seq)
+                if count is None:
+                    break
+                if count > 0:
+                    logger.info("Changeset seq %d: %d changesets", cs_next_seq, count)
+                cs_last_seq = cs_next_seq
+                cs_watcher.save_state(cs_last_seq)
+            except Exception:
+                logger.exception("Failed to process changeset seq %d", cs_next_seq)
+                break
+
         if (now - last_parquet_build) >= parquet_build_interval:
             last_parquet_build = now
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+                # Element changes parquet
                 built = parquet_builder.build(today_str)
                 if built:
                     logger.info("Built parquet for %s", today_str)
@@ -148,9 +183,33 @@ def main():
                         geojsonl.unlink()
                         logger.info("Cleaned up %s", geojsonl.name)
 
-                write_and_upload_metadata(data_dir, uploader, r2_public_url)
+                write_and_upload_metadata(data_dir / "parquet", uploader, r2_public_url, "osm-changes")
                 prune_old_files(data_dir / "parquet", retention_days)
                 prune_old_files(data_dir / "deletions", retention_days)
+
+                # Changeset parquet
+                cs_built = cs_parquet_builder.build(today_str)
+                if cs_built:
+                    logger.info("Built changeset parquet for %s", today_str)
+                    if uploader:
+                        pf = data_dir / "changeset_parquet" / f"date={today_str}" / "data.parquet"
+                        uploader.upload_file(pf, f"osm-changesets/date={today_str}/data.parquet")
+
+                for jsonl in sorted((data_dir / "changesets").glob("*.jsonl")):
+                    date_str = jsonl.stem
+                    if date_str == today_str:
+                        continue
+                    if cs_parquet_builder.build(date_str):
+                        logger.info("Built changeset parquet for %s", date_str)
+                        if uploader:
+                            pf = data_dir / "changeset_parquet" / f"date={date_str}" / "data.parquet"
+                            uploader.upload_file(pf, f"osm-changesets/date={date_str}/data.parquet")
+                        jsonl.unlink()
+                        logger.info("Cleaned up %s", jsonl.name)
+
+                write_and_upload_metadata(data_dir / "changeset_parquet", uploader, r2_public_url, "osm-changesets")
+                prune_old_files(data_dir / "changeset_parquet", retention_days)
+                prune_old_files(data_dir / "changesets", retention_days)
             except Exception:
                 logger.exception("Failed to build/upload parquet")
 
