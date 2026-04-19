@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <!-- Create node -->
+  <action type="create">
+    <new>
+      <node id="100" version="1" timestamp="2025-01-10T10:00:00Z"
+            uid="1001" user="creator1" changeset="5001"
+            lon="1.0" lat="2.0">
+        <tag k="name" v="New Cafe"/>
+        <tag k="amenity" v="cafe"/>
+      </node>
+    </new>
+  </action>
+  <!-- Modify node -->
+  <action type="modify">
+    <old>
+      <node id="200" version="3" lon="3.0" lat="4.0"
+            user="olduser" uid="2001" timestamp="2024-12-01T08:00:00Z" changeset="6001">
+        <tag k="name" v="Old Name"/>
+      </node>
+    </old>
+    <new>
+      <node id="200" version="4" timestamp="2025-01-11T11:00:00Z"
+            uid="2002" user="modifier1" changeset="6002"
+            lon="3.001" lat="4.001">
+        <tag k="name" v="New Name"/>
+      </node>
+    </new>
+  </action>
+  <!-- Delete node -->
+  <action type="delete">
+    <old>
+      <node id="300" version="5" lon="5.0" lat="6.0"
+            user="prevuser" uid="3001" timestamp="2024-11-01T07:00:00Z" changeset="7001">
+        <tag k="name" v="Deleted Place"/>
+      </node>
+    </old>
+    <new>
+      <node id="300" version="6" timestamp="2025-01-12T12:00:00Z"
+            uid="3002" user="deleter1" changeset="7002"
+            lon="5.0" lat="6.0" visible="false"/>
+    </new>
+  </action>
+  <!-- Modify way (open, LineString) -->
+  <action type="modify">
+    <old>
+      <way id="400" version="2" user="wayuser" uid="4001"
+           timestamp="2024-10-01T06:00:00Z" changeset="8001">
+        <bounds minlat="10.0" minlon="20.0" maxlat="10.2" maxlon="20.2"/>
+        <nd ref="4001" lon="20.0" lat="10.0"/>
+        <nd ref="4002" lon="20.1" lat="10.1"/>
+        <nd ref="4003" lon="20.2" lat="10.2"/>
+        <tag k="highway" v="residential"/>
+      </way>
+    </old>
+    <new>
+      <way id="400" version="3" timestamp="2025-01-13T13:00:00Z"
+           uid="4002" user="wayeditor" changeset="8002">
+        <bounds minlat="10.0" minlon="20.0" maxlat="10.2" maxlon="20.2"/>
+        <nd ref="4001" lon="20.0" lat="10.0"/>
+        <nd ref="4002" lon="20.1" lat="10.1"/>
+        <nd ref="4003" lon="20.2" lat="10.2"/>
+        <tag k="highway" v="tertiary"/>
+      </way>
+    </new>
+  </action>
+  <!-- Create way (closed, Polygon) -->
+  <action type="create">
+    <new>
+      <way id="500" version="1" timestamp="2025-01-14T14:00:00Z"
+           uid="5001" user="builder1" changeset="9001">
+        <bounds minlat="50.0" minlon="10.0" maxlat="50.1" maxlon="10.1"/>
+        <nd ref="5001" lon="10.0" lat="50.0"/>
+        <nd ref="5002" lon="10.1" lat="50.0"/>
+        <nd ref="5003" lon="10.1" lat="50.1"/>
+        <nd ref="5004" lon="10.0" lat="50.1"/>
+        <nd ref="5001" lon="10.0" lat="50.0"/>
+        <tag k="building" v="yes"/>
+      </way>
+    </new>
+  </action>
+</osm>
