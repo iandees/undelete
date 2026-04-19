@@ -567,7 +567,7 @@ function rowsToGeoJSON(rows) {
     if (!geometry) continue;
     const properties = {};
     for (const [k, v] of Object.entries(row)) {
-      if (k === "geometry" || k === "old_geometry" || k === "__geojson") continue;
+      if (k === "geometry" || k === "old_geometry" || k === "__geojson" || k === "bbox" || k === "date") continue;
       if (typeof v === "bigint") {
         properties[k] = Number(v);
       } else if (v instanceof Uint8Array || v instanceof ArrayBuffer) {
@@ -750,7 +750,7 @@ map.on("click", (e) => {
 // Results Table
 // =========================================================
 function renderTable(rows, columns) {
-  const skipCols = new Set(["geometry", "old_geometry"]);
+  const skipCols = new Set(["geometry", "old_geometry", "bbox", "date"]);
   const displayCols = columns.filter(c => !skipCols.has(c));
 
   const thead = document.querySelector("#results-table thead tr");
