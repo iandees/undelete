@@ -3,133 +3,277 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OSM Undelete</title>
+  <title>OSM Changes — DuckDB Query</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
   <style>
+    :root {
+      --bg: #1e1e2e;
+      --surface0: #181825;
+      --surface1: #313244;
+      --text: #cdd6f4;
+      --subtext: #a6adc8;
+      --accent: #89b4fa;
+      --green: #a6e3a1;
+      --yellow: #f9e2af;
+      --red: #f38ba8;
+      --overlay: #45475a;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Fira Code", monospace, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Query Bar ---- */
+    #query-bar {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--surface0);
+      border-bottom: 1px solid var(--surface1);
+      align-items: flex-start;
+      flex-shrink: 0;
+    }
+    #query-editor {
+      flex: 1;
+      min-height: 60px;
+      max-height: 200px;
+      resize: vertical;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--surface1);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: "Fira Code", "SF Mono", "Cascadia Code", monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      tab-size: 2;
+    }
+    #query-editor:focus { outline: none; border-color: var(--accent); }
+    .query-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    #run-btn {
+      background: var(--green);
+      color: #1e1e2e;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 18px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #run-btn:hover { filter: brightness(1.1); }
+    #run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #examples-btn, #bounds-btn {
+      background: var(--surface1);
+      color: var(--text);
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #examples-btn:hover, #bounds-btn:hover { background: var(--overlay); }
+
+    /* ---- Examples Dropdown ---- */
+    #examples-menu {
+      display: none;
+      position: absolute;
+      top: 0;
+      right: 0;
+      background: var(--surface0);
+      border: 1px solid var(--surface1);
+      border-radius: 6px;
+      z-index: 100;
+      min-width: 280px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    #examples-menu.open { display: block; }
+    .example-item {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 1px solid var(--surface1);
+    }
+    .example-item:last-child { border-bottom: none; }
+    .example-item:hover { background: var(--surface1); }
+    .example-item .label { font-weight: 600; color: var(--accent); }
+    .example-item .desc { font-size: 11px; color: var(--subtext); margin-top: 2px; }
+
+    /* ---- Status Bar ---- */
+    #status-bar {
+      padding: 4px 12px;
+      background: var(--surface1);
+      font-size: 12px;
+      color: var(--subtext);
+      flex-shrink: 0;
+      display: flex;
+      justify-content: space-between;
+    }
+    #status-bar .error { color: var(--red); }
+
+    /* ---- Map ---- */
+    #map-container {
+      flex: 1;
+      min-height: 100px;
+      position: relative;
+    }
+    #map { width: 100%; height: 100%; }
 
     .maplibregl-popup-content {
-      max-width: 400px;
+      background: var(--surface0);
+      color: var(--text);
+      border: 1px solid var(--surface1);
+      border-radius: 8px;
+      max-width: 420px;
       max-height: 400px;
       overflow-y: auto;
       font-size: 13px;
+      padding: 12px;
     }
-    .popup-title {
-      font-weight: bold;
-      font-size: 15px;
-      margin-bottom: 6px;
+    .maplibregl-popup-tip { border-top-color: var(--surface0); }
+    .maplibregl-popup-close-button { color: var(--subtext); font-size: 18px; }
+    .popup-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; color: var(--accent); }
+    .popup-meta { color: var(--subtext); font-size: 12px; margin-bottom: 6px; }
+    .popup-meta a { color: var(--accent); }
+    .popup-tags { width: 100%; border-collapse: collapse; margin: 6px 0; }
+    .popup-tags td { padding: 2px 6px; border-bottom: 1px solid var(--surface1); font-size: 12px; }
+    .popup-tags td:first-child { font-weight: 600; color: var(--subtext); white-space: nowrap; }
+
+    /* ---- Resize Handle ---- */
+    #resize-handle {
+      height: 6px;
+      background: var(--surface1);
+      cursor: row-resize;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .popup-meta {
-      color: #666;
-      margin-bottom: 8px;
-      font-size: 12px;
+    #resize-handle::after {
+      content: "";
+      width: 40px;
+      height: 3px;
+      background: var(--overlay);
+      border-radius: 2px;
     }
-    .popup-meta a { color: #0078d4; }
-    .tag-table {
+    #resize-handle:hover { background: var(--overlay); }
+
+    /* ---- Results Table ---- */
+    #table-container {
+      height: 250px;
+      min-height: 60px;
+      overflow: auto;
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    #results-table {
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 8px;
-    }
-    .tag-table td {
-      padding: 2px 6px;
-      border-bottom: 1px solid #eee;
       font-size: 12px;
     }
-    .tag-table td:first-child {
+    #results-table thead { position: sticky; top: 0; z-index: 2; }
+    #results-table th {
+      background: var(--surface0);
+      padding: 6px 10px;
+      text-align: left;
       font-weight: 600;
-      color: #444;
+      color: var(--subtext);
+      border-bottom: 2px solid var(--surface1);
       white-space: nowrap;
     }
-    .popup-actions {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .popup-actions a, .popup-actions button {
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 12px;
-      text-decoration: none;
-      cursor: pointer;
-      border: 1px solid #ccc;
-      background: #f5f5f5;
-      color: #333;
-    }
-    .popup-actions a:hover, .popup-actions button:hover {
-      background: #e0e0e0;
-    }
-    #about {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(255,255,255,0.92);
-      padding: 10px 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      color: #333;
-      z-index: 1;
+    #results-table td {
+      padding: 5px 10px;
+      border-bottom: 1px solid var(--surface1);
+      white-space: nowrap;
       max-width: 300px;
-      line-height: 1.5;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    #about-toggle {
-      background: none;
-      border: none;
-      cursor: pointer;
-      font-size: 14px;
-      color: #999;
-      float: right;
-      padding: 0 0 0 8px;
-      line-height: 1;
-    }
-    #about h1 {
-      font-size: 16px;
-      margin-bottom: 4px;
-    }
-    #about p {
-      margin: 4px 0;
-      color: #555;
-    }
-    #about a { color: #0078d4; }
-    #about.collapsed #about-body { display: none; }
-    #about.collapsed h1 { margin-bottom: 0; }
-    #status-bar {
+    #results-table tr { cursor: pointer; }
+    #results-table tr:hover { background: var(--surface1); }
+    #results-table tr.highlighted { background: var(--overlay); }
+    .action-create { color: var(--green); font-weight: 600; }
+    .action-modify { color: var(--yellow); font-weight: 600; }
+    .action-delete { color: var(--red); font-weight: 600; }
+
+    /* ---- Loading Overlay ---- */
+    #loading-overlay {
+      display: none;
       position: absolute;
-      bottom: 8px;
-      left: 8px;
-      background: rgba(255,255,255,0.9);
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 12px;
-      color: #555;
-      z-index: 1;
-      pointer-events: none;
+      inset: 0;
+      background: rgba(17,17,27,0.7);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--accent);
     }
+    #loading-overlay.visible { display: flex; }
   </style>
 </head>
 <body>
 
-<div id="map"></div>
-<div id="about">
-  <button id="about-toggle" onclick="document.getElementById('about').classList.toggle('collapsed')">&#x2715;</button>
-  <h1>OSM Undelete</h1>
-  <div id="about-body">
-    <p>Showing OpenStreetMap objects that have been deleted in the last 90 days. Click any feature to see details, view its history, or download the original data.</p>
-    <p><span style="color:#e74c3c">&#9679;</span> Historical deletions &nbsp; <span style="color:#e67e22">&#9679;</span> Deleted today</p>
-    <p><a href="https://github.com/iandees/undelete" target="_blank">GitHub</a></p>
+<!-- Query Bar -->
+<div id="query-bar">
+  <textarea id="query-editor" spellcheck="false" placeholder="Enter SQL query... (Ctrl+Enter to run)"></textarea>
+  <div class="query-actions">
+    <button id="run-btn" onclick="runQuery()">Run</button>
+    <div style="position:relative;">
+      <button id="examples-btn" onclick="toggleExamples()">Examples</button>
+      <div id="examples-menu"></div>
+    </div>
+    <button id="bounds-btn" onclick="insertMapBounds()">Map Bounds</button>
   </div>
 </div>
-<div id="status-bar"></div>
+
+<!-- Status Bar -->
+<div id="status-bar">
+  <span id="status-left">Initializing DuckDB...</span>
+  <span id="status-right"></span>
+</div>
+
+<!-- Map -->
+<div id="map-container">
+  <div id="map"></div>
+  <div id="loading-overlay">Running query...</div>
+</div>
+
+<!-- Resize Handle -->
+<div id="resize-handle"></div>
+
+<!-- Results Table -->
+<div id="table-container">
+  <table id="results-table">
+    <thead><tr></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
-<script>
+<script type="module">
+import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
 
-// Register PMTiles protocol
-const protocol = new pmtiles.Protocol();
-maplibregl.addProtocol("pmtiles", protocol.tile);
+// =========================================================
+// State
+// =========================================================
+let db = null;
+let conn = null;
+let metadata = null;
+let baseParquetUrl = null;
+let currentResults = []; // array of row objects
+let currentGeoJSON = null; // FeatureCollection
+let highlightedRowIdx = null;
 
 const map = new maplibregl.Map({
   container: "map",
@@ -149,172 +293,666 @@ const map = new maplibregl.Map({
   center: [0, 30],
   zoom: 2,
 });
-
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 
-const DELETE_COLOR = "#e74c3c";
-const TODAY_COLOR = "#e67e22";
-const loadedSources = new Set();
+// =========================================================
+// DuckDB Initialization
+// =========================================================
+async function initDuckDB() {
+  try {
+    const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+    const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
 
-map.on("load", () => {
-  const base = window.location.origin;
-  fetch(base + "/manifest.json")
-    .then(r => r.ok ? r.json() : null)
-    .then(manifest => {
-      if (!manifest) return;
+    const worker_url = URL.createObjectURL(
+      new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
+    );
+    const worker = new Worker(worker_url);
+    const logger = new duckdb.ConsoleLogger();
+    db = new duckdb.AsyncDuckDB(logger, worker);
+    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    URL.revokeObjectURL(worker_url);
 
-      const today = new Date().toISOString().slice(0, 10);
-      for (const file of manifest.files) {
-        const date = file.replace(".pmtiles", "");
-        const sourceId = `deletions-${date}`;
-        const color = date === today ? TODAY_COLOR : DELETE_COLOR;
-        addPMTilesSource(sourceId, `${base}/${file}`, color);
-      }
+    conn = await db.connect();
 
-      const updated = new Date(manifest.last_updated);
-      const oldest = manifest.files[0].replace(".pmtiles", "");
-      const newest = manifest.files[manifest.files.length - 1].replace(".pmtiles", "");
-      const bar = document.getElementById("status-bar");
-      bar.textContent = `Last updated: ${updated.toLocaleString()} · Data from ${oldest} to ${newest}`;
-    })
-    .catch(() => {});
+    // Load extensions
+    await conn.query("INSTALL spatial; LOAD spatial;");
+    await conn.query("INSTALL httpfs; LOAD httpfs;");
+
+    setStatus("DuckDB ready");
+  } catch (e) {
+    setStatus("DuckDB init failed: " + e.message, true);
+    console.error(e);
+  }
+}
+
+async function loadMetadata() {
+  try {
+    const resp = await fetch("/data/parquet/metadata.json");
+    if (!resp.ok) throw new Error("not found");
+    metadata = await resp.json();
+    if (metadata.base_url) {
+      baseParquetUrl = metadata.base_url + "/osm-changes";
+    } else {
+      baseParquetUrl = window.location.origin + "/data/parquet";
+    }
+    const dates = metadata.dates || [];
+    const latest = dates.length ? dates[dates.length - 1] : null;
+    setStatus(`DuckDB ready | ${dates.length} dates available${latest ? " (latest: " + latest + ")" : ""}`);
+    buildExamples(latest);
+    if (latest) {
+      document.getElementById("query-editor").value = buildDefaultQuery(latest);
+    }
+  } catch {
+    // No metadata — use manual URL
+    baseParquetUrl = window.location.origin + "/data/parquet";
+    buildExamples(null);
+    document.getElementById("query-editor").value =
+      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet', spatial=true) LIMIT 100;";
+    setStatus("DuckDB ready | No metadata found, use manual URLs");
+  }
+}
+
+function parquetUrl(datePattern) {
+  return baseParquetUrl + "/date=" + datePattern + "/data.parquet";
+}
+
+function buildDefaultQuery(date) {
+  return `SELECT * FROM read_parquet('${parquetUrl(date)}', spatial=true) LIMIT 100;`;
+}
+
+// =========================================================
+// Examples
+// =========================================================
+function buildExamples(latestDate) {
+  const d = latestDate || "2025-01-01";
+  const allUrl = parquetUrl("*");
+  const dayUrl = parquetUrl(d);
+
+  window._examples = [
+    {
+      label: "Today's changes (sample)",
+      desc: "First 100 rows from the latest date",
+      sql: `SELECT *\nFROM read_parquet('${dayUrl}', spatial=true)\nLIMIT 100;`,
+    },
+    {
+      label: "Today's deletes",
+      desc: "All delete actions from the latest date",
+      sql: `SELECT *\nFROM read_parquet('${dayUrl}', spatial=true)\nWHERE action = 'delete';`,
+    },
+    {
+      label: "Changes by user",
+      desc: "Count of changes grouped by user and action",
+      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM read_parquet('${dayUrl}', spatial=true)\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50;`,
+    },
+    {
+      label: "Deleted buildings (all time)",
+      desc: "Buildings deleted across all available dates",
+      sql: `SELECT *\nFROM read_parquet('${allUrl}', spatial=true, hive_partitioning=true)\nWHERE action = 'delete'\n  AND tags->>'building' IS NOT NULL\nLIMIT 200;`,
+    },
+  ];
+
+  const menu = document.getElementById("examples-menu");
+  menu.innerHTML = "";
+  for (const ex of window._examples) {
+    const div = document.createElement("div");
+    div.className = "example-item";
+    div.innerHTML = `<div class="label">${ex.label}</div><div class="desc">${ex.desc}</div>`;
+    div.addEventListener("click", () => {
+      document.getElementById("query-editor").value = ex.sql;
+      menu.classList.remove("open");
+    });
+    menu.appendChild(div);
+  }
+}
+
+window.toggleExamples = function () {
+  document.getElementById("examples-menu").classList.toggle("open");
+};
+
+// Close examples menu on outside click
+document.addEventListener("click", (e) => {
+  const menu = document.getElementById("examples-menu");
+  if (!menu.contains(e.target) && e.target.id !== "examples-btn") {
+    menu.classList.remove("open");
+  }
 });
 
-function addPMTilesSource(sourceId, url, color) {
-  map.addSource(sourceId, {
-    type: "vector",
-    url: `pmtiles://${url}`,
-  });
-  loadedSources.add(sourceId);
-  addDeletionLayers(sourceId, color);
-}
+// =========================================================
+// Map Bounds insertion
+// =========================================================
+window.insertMapBounds = function () {
+  const bounds = map.getBounds();
+  const clause = `ST_Within(geometry, ST_MakeEnvelope(${bounds.getWest().toFixed(6)}, ${bounds.getSouth().toFixed(6)}, ${bounds.getEast().toFixed(6)}, ${bounds.getNorth().toFixed(6)}))`;
 
-function addDeletionLayers(sourceId, color) {
-  map.addLayer({
-    id: sourceId + "-polygons",
-    type: "fill",
-    source: sourceId,
-    "source-layer": "deletions",
-    filter: ["==", "$type", "Polygon"],
-    paint: {
-      "fill-color": color,
-      "fill-opacity": 0.3,
-      "fill-outline-color": color,
-    },
-  });
+  const editor = document.getElementById("query-editor");
+  let sql = editor.value;
 
-  map.addLayer({
-    id: sourceId + "-lines",
-    type: "line",
-    source: sourceId,
-    "source-layer": "deletions",
-    filter: ["==", "$type", "LineString"],
-    paint: {
-      "line-color": color,
-      "line-width": 2,
-    },
-  });
-
-  map.addLayer({
-    id: sourceId + "-points",
-    type: "circle",
-    source: sourceId,
-    "source-layer": "deletions",
-    filter: ["==", "$type", "Point"],
-    paint: {
-      "circle-radius": 5,
-      "circle-color": color,
-      "circle-stroke-width": 1,
-      "circle-stroke-color": "#fff",
-    },
-  });
-}
-
-// Click handler for popups
-function getClickableLayers() {
-  const layers = [];
-  for (const sourceId of loadedSources) {
-    layers.push(sourceId + "-points", sourceId + "-lines", sourceId + "-polygons");
+  // Find insertion point: before LIMIT, ORDER BY, or GROUP BY (case insensitive)
+  const upperSql = sql.toUpperCase();
+  const insertionKeywords = ["LIMIT", "ORDER BY", "GROUP BY"];
+  let insertPos = -1;
+  for (const kw of insertionKeywords) {
+    const idx = upperSql.lastIndexOf(kw);
+    if (idx !== -1 && (insertPos === -1 || idx < insertPos)) {
+      insertPos = idx;
+    }
   }
-  return layers;
+
+  const hasWhere = upperSql.includes("WHERE");
+
+  if (hasWhere) {
+    if (insertPos !== -1) {
+      sql = sql.slice(0, insertPos) + "\n  AND " + clause + "\n" + sql.slice(insertPos);
+    } else {
+      // Append before semicolon or at end
+      const semiIdx = sql.lastIndexOf(";");
+      if (semiIdx !== -1) {
+        sql = sql.slice(0, semiIdx) + "\n  AND " + clause + sql.slice(semiIdx);
+      } else {
+        sql += "\n  AND " + clause;
+      }
+    }
+  } else {
+    if (insertPos !== -1) {
+      sql = sql.slice(0, insertPos) + "WHERE " + clause + "\n" + sql.slice(insertPos);
+    } else {
+      const semiIdx = sql.lastIndexOf(";");
+      if (semiIdx !== -1) {
+        sql = sql.slice(0, semiIdx) + "\nWHERE " + clause + sql.slice(semiIdx);
+      } else {
+        sql += "\nWHERE " + clause;
+      }
+    }
+  }
+
+  editor.value = sql;
+};
+
+// =========================================================
+// Run Query
+// =========================================================
+window.runQuery = async function () {
+  if (!conn) { setStatus("DuckDB not ready", true); return; }
+  const sql = document.getElementById("query-editor").value.trim();
+  if (!sql) return;
+
+  const overlay = document.getElementById("loading-overlay");
+  overlay.classList.add("visible");
+  document.getElementById("run-btn").disabled = true;
+
+  try {
+    const start = performance.now();
+    const result = await conn.query(sql);
+    const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+
+    // Convert Arrow table to array of row objects
+    const schema = result.schema;
+    const columns = schema.fields.map(f => f.name);
+    const rows = result.toArray().map(row => {
+      const obj = {};
+      for (const col of columns) {
+        obj[col] = row[col];
+      }
+      return obj;
+    });
+
+    currentResults = rows;
+    setStatus(`${rows.length} rows in ${elapsed}s`);
+    renderTable(rows, columns);
+
+    // If there is a geometry column, render on map
+    const geomCol = columns.find(c => c === "geometry");
+    if (geomCol && rows.length > 0) {
+      const geojson = rowsToGeoJSON(rows, geomCol);
+      currentGeoJSON = geojson;
+      renderGeoJSONOnMap(geojson);
+    } else {
+      clearMapLayer();
+      currentGeoJSON = null;
+    }
+  } catch (e) {
+    setStatus("Error: " + e.message, true);
+    console.error(e);
+  } finally {
+    overlay.classList.remove("visible");
+    document.getElementById("run-btn").disabled = false;
+  }
+};
+
+// Keyboard shortcut
+document.getElementById("query-editor").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    window.runQuery();
+  }
+});
+
+// =========================================================
+// WKB to GeoJSON Parser
+// =========================================================
+function readWKB(buf) {
+  // buf is a Uint8Array
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let offset = 0;
+
+  function readByte() { return view.getUint8(offset++); }
+  function readUint32(le) { const v = view.getUint32(offset, le); offset += 4; return v; }
+  function readFloat64(le) { const v = view.getFloat64(offset, le); offset += 8; return v; }
+
+  function readGeometry() {
+    const byteOrder = readByte(); // 0=BE, 1=LE
+    const le = byteOrder === 1;
+    const typeInt = readUint32(le);
+    // Mask out SRID and Z/M flags for the base type
+    const baseType = typeInt & 0xff;
+
+    switch (baseType) {
+      case 1: return readPoint(le);
+      case 2: return readLineString(le);
+      case 3: return readPolygon(le);
+      case 4: return readMultiPoint(le);
+      case 5: return readMultiLineString(le);
+      case 6: return readMultiPolygon(le);
+      case 7: return readGeometryCollection(le);
+      default: return null;
+    }
+  }
+
+  function readCoord(le) {
+    const x = readFloat64(le);
+    const y = readFloat64(le);
+    return [x, y];
+  }
+
+  function readPoint(le) {
+    return { type: "Point", coordinates: readCoord(le) };
+  }
+
+  function readLineString(le) {
+    const n = readUint32(le);
+    const coords = [];
+    for (let i = 0; i < n; i++) coords.push(readCoord(le));
+    return { type: "LineString", coordinates: coords };
+  }
+
+  function readPolygon(le) {
+    const nRings = readUint32(le);
+    const rings = [];
+    for (let i = 0; i < nRings; i++) {
+      const n = readUint32(le);
+      const ring = [];
+      for (let j = 0; j < n; j++) ring.push(readCoord(le));
+      rings.push(ring);
+    }
+    return { type: "Polygon", coordinates: rings };
+  }
+
+  function readMultiPoint(le) {
+    const n = readUint32(le);
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const g = readGeometry();
+      if (g) pts.push(g.coordinates);
+    }
+    return { type: "MultiPoint", coordinates: pts };
+  }
+
+  function readMultiLineString(le) {
+    const n = readUint32(le);
+    const lines = [];
+    for (let i = 0; i < n; i++) {
+      const g = readGeometry();
+      if (g) lines.push(g.coordinates);
+    }
+    return { type: "MultiLineString", coordinates: lines };
+  }
+
+  function readMultiPolygon(le) {
+    const n = readUint32(le);
+    const polys = [];
+    for (let i = 0; i < n; i++) {
+      const g = readGeometry();
+      if (g) polys.push(g.coordinates);
+    }
+    return { type: "MultiPolygon", coordinates: polys };
+  }
+
+  function readGeometryCollection(le) {
+    const n = readUint32(le);
+    const geoms = [];
+    for (let i = 0; i < n; i++) {
+      const g = readGeometry();
+      if (g) geoms.push(g);
+    }
+    return { type: "GeometryCollection", geometries: geoms };
+  }
+
+  return readGeometry();
 }
 
+function geometryToUint8Array(val) {
+  if (val instanceof Uint8Array) return val;
+  if (val instanceof ArrayBuffer) return new Uint8Array(val);
+  if (val && val.buffer) return new Uint8Array(val.buffer, val.byteOffset, val.byteLength);
+  // DuckDB WASM may return typed arrays or array-like objects
+  if (val && typeof val.length === "number") return new Uint8Array(val);
+  return null;
+}
+
+function rowsToGeoJSON(rows, geomCol) {
+  const features = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const raw = row[geomCol];
+    const buf = geometryToUint8Array(raw);
+    if (!buf || buf.length === 0) continue;
+    try {
+      const geometry = readWKB(buf);
+      if (!geometry) continue;
+      const properties = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (k === geomCol || k === "old_geometry") continue;
+        // Convert BigInt and other non-serializable types
+        if (typeof v === "bigint") {
+          properties[k] = Number(v);
+        } else if (v instanceof Uint8Array || v instanceof ArrayBuffer) {
+          properties[k] = "(binary)";
+        } else {
+          properties[k] = v;
+        }
+      }
+      properties._rowIdx = i;
+      features.push({ type: "Feature", geometry, properties });
+    } catch (e) {
+      console.warn("WKB parse error row", i, e);
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
+
+// =========================================================
+// Map Rendering
+// =========================================================
+function clearMapLayer() {
+  for (const id of ["results-points", "results-lines", "results-polygons", "results-points-highlight"]) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+  if (map.getSource("results")) map.removeSource("results");
+}
+
+function actionColor(action) {
+  if (action === "create") return "#a6e3a1";
+  if (action === "modify") return "#f9e2af";
+  if (action === "delete") return "#f38ba8";
+  return "#89b4fa";
+}
+
+function renderGeoJSONOnMap(geojson) {
+  clearMapLayer();
+
+  map.addSource("results", { type: "geojson", data: geojson });
+
+  // Points — colored by action
+  map.addLayer({
+    id: "results-points",
+    type: "circle",
+    source: "results",
+    filter: ["any",
+      ["==", ["geometry-type"], "Point"],
+      ["==", ["geometry-type"], "MultiPoint"]
+    ],
+    paint: {
+      "circle-radius": 6,
+      "circle-color": [
+        "match", ["get", "action"],
+        "create", "#a6e3a1",
+        "modify", "#f9e2af",
+        "delete", "#f38ba8",
+        "#89b4fa"
+      ],
+      "circle-stroke-width": 1,
+      "circle-stroke-color": "#1e1e2e",
+    },
+  });
+
+  // Lines
+  map.addLayer({
+    id: "results-lines",
+    type: "line",
+    source: "results",
+    filter: ["any",
+      ["==", ["geometry-type"], "LineString"],
+      ["==", ["geometry-type"], "MultiLineString"]
+    ],
+    paint: {
+      "line-color": "#89b4fa",
+      "line-width": 2.5,
+    },
+  });
+
+  // Polygons
+  map.addLayer({
+    id: "results-polygons",
+    type: "fill",
+    source: "results",
+    filter: ["any",
+      ["==", ["geometry-type"], "Polygon"],
+      ["==", ["geometry-type"], "MultiPolygon"]
+    ],
+    paint: {
+      "fill-color": "#89b4fa",
+      "fill-opacity": 0.25,
+      "fill-outline-color": "#89b4fa",
+    },
+  });
+
+  // Fit bounds
+  if (geojson.features.length > 0) {
+    const bounds = new maplibregl.LngLatBounds();
+    for (const f of geojson.features) {
+      expandBounds(bounds, f.geometry);
+    }
+    if (bounds.getNorthEast() && bounds.getSouthWest()) {
+      map.fitBounds(bounds, { padding: 40, maxZoom: 16 });
+    }
+  }
+
+  // Cursor
+  for (const layerId of ["results-points", "results-lines", "results-polygons"]) {
+    map.on("mouseenter", layerId, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
+  }
+}
+
+function expandBounds(bounds, geom) {
+  if (geom.type === "Point") {
+    bounds.extend(geom.coordinates);
+  } else if (geom.type === "MultiPoint" || geom.type === "LineString") {
+    for (const c of geom.coordinates) bounds.extend(c);
+  } else if (geom.type === "MultiLineString" || geom.type === "Polygon") {
+    for (const ring of geom.coordinates) for (const c of ring) bounds.extend(c);
+  } else if (geom.type === "MultiPolygon") {
+    for (const poly of geom.coordinates) for (const ring of poly) for (const c of ring) bounds.extend(c);
+  } else if (geom.type === "GeometryCollection") {
+    for (const g of geom.geometries) expandBounds(bounds, g);
+  }
+}
+
+// Map click popup
 map.on("click", (e) => {
-  const features = map.queryRenderedFeatures(e.point, { layers: getClickableLayers().filter((l) => map.getLayer(l)) });
+  const layers = ["results-points", "results-lines", "results-polygons"].filter(id => map.getLayer(id));
+  if (layers.length === 0) return;
+  const features = map.queryRenderedFeatures(e.point, { layers });
   if (features.length === 0) return;
 
-  const f = features[0];
-  const props = f.properties;
-  const osmType = props.osm_type;
-  const osmId = props.osm_id;
+  const props = features[0].properties;
+  const rowIdx = props._rowIdx;
 
-  // Parse tags — may be a JSON string
-  let tags = props.tags;
-  if (typeof tags === "string") {
-    try { tags = JSON.parse(tags); } catch { tags = {}; }
+  // Highlight corresponding table row
+  highlightTableRow(rowIdx);
+
+  // Build popup HTML
+  let html = "";
+  const osmType = props.osm_type || "";
+  const osmId = props.osm_id || "";
+  if (osmType && osmId) {
+    html += `<div class="popup-title">${escapeHtml(osmType)}/${escapeHtml(String(osmId))}</div>`;
   }
-  tags = tags || {};
 
-  // Build popup
-  let html = `<div class="popup-title">${osmType}/${osmId}</div>`;
+  const action = props.action || "";
+  const user = props.user || "";
+  const timestamp = props.timestamp || "";
   html += `<div class="popup-meta">`;
-  html += `Deleted <strong>${props.deleted_at || "unknown"}</strong>`;
-  html += ` by <a href="https://www.openstreetmap.org/user/${encodeURIComponent(props.deleted_by)}" target="_blank">${props.deleted_by || "unknown"}</a>`;
-  html += ` in <a href="https://www.openstreetmap.org/changeset/${props.deleted_changeset}" target="_blank">changeset ${props.deleted_changeset}</a>`;
+  if (action) html += `<span class="action-${action}">${escapeHtml(action)}</span> `;
+  if (user) html += `by <a href="https://www.openstreetmap.org/user/${encodeURIComponent(user)}" target="_blank">${escapeHtml(user)}</a> `;
+  if (timestamp) html += `at ${escapeHtml(String(timestamp))} `;
   html += `</div>`;
+
+  if (osmType && osmId) {
+    html += `<div style="margin:4px 0;font-size:12px;"><a href="https://www.openstreetmap.org/${osmType}/${osmId}/history" target="_blank" style="color:var(--accent);">View OSM history</a></div>`;
+  }
 
   // Tags table
-  const tagEntries = Object.entries(tags);
-  if (tagEntries.length > 0) {
-    html += `<table class="tag-table">`;
-    for (const [k, v] of tagEntries) {
-      html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`;
+  let tags = props.tags;
+  if (typeof tags === "string") {
+    try { tags = JSON.parse(tags); } catch { tags = null; }
+  }
+  if (tags && typeof tags === "object") {
+    const entries = Object.entries(tags);
+    if (entries.length > 0) {
+      html += `<table class="popup-tags">`;
+      for (const [k, v] of entries) {
+        html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`;
+      }
+      html += `</table>`;
     }
-    html += `</table>`;
-  } else {
-    html += `<p style="color:#999;font-size:12px;">No tags</p>`;
   }
 
-  // Actions
-  const center = getFeatureCenter(f);
-  const josmUrl = `http://localhost:8111/load_and_zoom?left=${center[0] - 0.001}&right=${center[0] + 0.001}&bottom=${center[1] - 0.001}&top=${center[1] + 0.001}`;
-
-  html += `<div class="popup-actions">`;
-  html += `<a href="https://www.openstreetmap.org/${osmType}/${osmId}/history" target="_blank">History</a>`;
-  html += `<a href="${josmUrl}" target="_blank">Open in JOSM</a>`;
-  const osmVersion = props.version;
-  html += `<button onclick="downloadOsm('${osmType}', ${osmId}, ${osmVersion})">Download .osm</button>`;
-  html += `</div>`;
-
-  new maplibregl.Popup()
+  new maplibregl.Popup({ maxWidth: "420px" })
     .setLngLat(e.lngLat)
     .setHTML(html)
     .addTo(map);
 });
 
-// Change cursor on hover — set up when layers are added
-const origAddLayer = map.addLayer.bind(map);
-map.addLayer = function(layerDef, ...args) {
-  origAddLayer(layerDef, ...args);
-  const id = layerDef.id;
-  if (id.endsWith("-points") || id.endsWith("-lines") || id.endsWith("-polygons")) {
-    map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
-    map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
-  }
-};
+// =========================================================
+// Results Table
+// =========================================================
+function renderTable(rows, columns) {
+  const skipCols = new Set(["geometry", "old_geometry"]);
+  const displayCols = columns.filter(c => !skipCols.has(c));
 
-function getFeatureCenter(feature) {
-  const geom = feature.geometry;
-  if (geom.type === "Point") return geom.coordinates;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const coords = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates;
-  for (const c of coords) {
-    if (c[0] < minX) minX = c[0];
-    if (c[0] > maxX) maxX = c[0];
-    if (c[1] < minY) minY = c[1];
-    if (c[1] > maxY) maxY = c[1];
+  const thead = document.querySelector("#results-table thead tr");
+  thead.innerHTML = "";
+  for (const col of displayCols) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    thead.appendChild(th);
   }
-  return [(minX + maxX) / 2, (minY + maxY) / 2];
+
+  const tbody = document.querySelector("#results-table tbody");
+  tbody.innerHTML = "";
+  for (let i = 0; i < rows.length; i++) {
+    const tr = document.createElement("tr");
+    tr.dataset.rowIdx = i;
+    for (const col of displayCols) {
+      const td = document.createElement("td");
+      let val = rows[i][col];
+      if (typeof val === "bigint") val = Number(val);
+      if (val instanceof Uint8Array || val instanceof ArrayBuffer) {
+        td.textContent = "(binary)";
+      } else if (val !== null && val !== undefined && typeof val === "object") {
+        td.textContent = JSON.stringify(val);
+      } else {
+        td.textContent = val != null ? String(val) : "";
+      }
+
+      // Color action column
+      if (col === "action") {
+        const action = String(val).toLowerCase();
+        if (action === "create") td.className = "action-create";
+        else if (action === "modify") td.className = "action-modify";
+        else if (action === "delete") td.className = "action-delete";
+      }
+      tr.appendChild(td);
+    }
+
+    // Click row to zoom to feature
+    tr.addEventListener("click", () => {
+      highlightTableRow(i);
+      zoomToRow(i);
+    });
+
+    tbody.appendChild(tr);
+  }
+}
+
+function highlightTableRow(idx) {
+  // Remove old highlight
+  const tbody = document.querySelector("#results-table tbody");
+  const prev = tbody.querySelector("tr.highlighted");
+  if (prev) prev.classList.remove("highlighted");
+
+  const row = tbody.querySelector(`tr[data-row-idx="${idx}"]`);
+  if (row) {
+    row.classList.add("highlighted");
+    row.scrollIntoView({ block: "nearest" });
+  }
+  highlightedRowIdx = idx;
+}
+
+function zoomToRow(idx) {
+  if (!currentGeoJSON) return;
+  const feature = currentGeoJSON.features.find(f => f.properties._rowIdx === idx);
+  if (!feature) return;
+  const bounds = new maplibregl.LngLatBounds();
+  expandBounds(bounds, feature.geometry);
+  if (bounds.getNorthEast() && bounds.getSouthWest()) {
+    map.fitBounds(bounds, { padding: 60, maxZoom: 18 });
+  }
+}
+
+// =========================================================
+// Resize Handle
+// =========================================================
+(function initResize() {
+  const handle = document.getElementById("resize-handle");
+  const mapContainer = document.getElementById("map-container");
+  const tableContainer = document.getElementById("table-container");
+  let startY, startMapH, startTableH;
+
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    startY = e.clientY;
+    startMapH = mapContainer.getBoundingClientRect().height;
+    startTableH = tableContainer.getBoundingClientRect().height;
+
+    function onMove(e) {
+      const dy = e.clientY - startY;
+      const newMapH = Math.max(100, startMapH + dy);
+      const newTableH = Math.max(60, startTableH - dy);
+      mapContainer.style.flex = "none";
+      mapContainer.style.height = newMapH + "px";
+      tableContainer.style.height = newTableH + "px";
+      map.resize();
+    }
+
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+})();
+
+// =========================================================
+// Status
+// =========================================================
+function setStatus(msg, isError) {
+  const el = document.getElementById("status-left");
+  el.textContent = msg;
+  el.className = isError ? "error" : "";
 }
 
 function escapeHtml(str) {
@@ -323,92 +961,15 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-const OSM_API = "https://api.openstreetmap.org/api/0.6";
-
-async function downloadOsm(osmType, osmId, version) {
-  try {
-    const resp = await fetch(`${OSM_API}/${osmType}/${osmId}/${version}`);
-    if (!resp.ok) throw new Error(`Failed to fetch ${osmType}/${osmId}/${version}: ${resp.status}`);
-    const text = await resp.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(text, "text/xml");
-
-    // Collect all elements for the final document
-    const nodes = new Map();  // id -> XML string
-    const ways = new Map();
-    const relations = new Map();
-
-    if (osmType === "node") {
-      const node = doc.querySelector("node");
-      nodes.set(osmId, new XMLSerializer().serializeToString(node));
-    } else if (osmType === "way") {
-      const way = doc.querySelector("way");
-      // Fetch all referenced nodes
-      const ndRefs = Array.from(way.querySelectorAll("nd")).map(nd => nd.getAttribute("ref"));
-      const nodeResults = await Promise.all(
-        ndRefs.map(ref => fetch(`${OSM_API}/node/${ref}`).then(r => r.ok ? r.text() : null))
-      );
-      for (const nodeText of nodeResults) {
-        if (!nodeText) continue;
-        const nodeDoc = parser.parseFromString(nodeText, "text/xml");
-        const node = nodeDoc.querySelector("node");
-        if (node) nodes.set(node.getAttribute("id"), new XMLSerializer().serializeToString(node));
-      }
-      ways.set(String(osmId), new XMLSerializer().serializeToString(way));
-    } else if (osmType === "relation") {
-      const rel = doc.querySelector("relation");
-      const members = Array.from(rel.querySelectorAll("member"));
-      // Fetch member nodes and ways (with their nodes)
-      const fetches = members.map(async (member) => {
-        const type = member.getAttribute("type");
-        const ref = member.getAttribute("ref");
-        const r = await fetch(`${OSM_API}/${type}/${ref}`);
-        if (!r.ok) return;
-        const t = await r.text();
-        const d = parser.parseFromString(t, "text/xml");
-        if (type === "node") {
-          const node = d.querySelector("node");
-          if (node) nodes.set(ref, new XMLSerializer().serializeToString(node));
-        } else if (type === "way") {
-          const way = d.querySelector("way");
-          if (!way) return;
-          ways.set(ref, new XMLSerializer().serializeToString(way));
-          // Fetch the way's nodes too
-          const ndRefs = Array.from(way.querySelectorAll("nd")).map(nd => nd.getAttribute("ref"));
-          const nodeResults = await Promise.all(
-            ndRefs.map(nref => fetch(`${OSM_API}/node/${nref}`).then(nr => nr.ok ? nr.text() : null))
-          );
-          for (const nodeText of nodeResults) {
-            if (!nodeText) continue;
-            const nd = parser.parseFromString(nodeText, "text/xml");
-            const node = nd.querySelector("node");
-            if (node) nodes.set(node.getAttribute("id"), new XMLSerializer().serializeToString(node));
-          }
-        }
-      });
-      await Promise.all(fetches);
-      relations.set(String(osmId), new XMLSerializer().serializeToString(rel));
-    }
-
-    // Build the combined .osm XML
-    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="osm-undelete">\n';
-    for (const s of nodes.values()) xml += "  " + s + "\n";
-    for (const s of ways.values()) xml += "  " + s + "\n";
-    for (const s of relations.values()) xml += "  " + s + "\n";
-    xml += "</osm>\n";
-
-    const blob = new Blob([xml], { type: "application/xml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${osmType}-${osmId}.osm`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } catch (err) {
-    alert("Failed to download: " + err.message);
-  }
+// =========================================================
+// Init
+// =========================================================
+async function init() {
+  await initDuckDB();
+  await loadMetadata();
 }
 
+init();
 </script>
 </body>
 </html>
