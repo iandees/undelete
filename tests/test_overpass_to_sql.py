@@ -161,3 +161,30 @@ def test_out_tags():
     normed = _normalize(sql)
     assert "SELECT osm_type, osm_id, tags" in normed
     assert "geometry" not in normed.split("FROM latest")[1]
+
+
+# --- Error handling ---
+
+def test_error_empty_query():
+    with pytest.raises(OverpassParseError):
+        overpass_to_sql('')
+
+
+def test_error_missing_semicolon():
+    with pytest.raises(OverpassParseError):
+        overpass_to_sql('node["building"]')
+
+
+def test_error_unsupported_recurse():
+    with pytest.raises(OverpassParseError):
+        overpass_to_sql('node["building"]; >;')
+
+
+def test_error_unsupported_out_meta():
+    with pytest.raises(OverpassParseError):
+        overpass_to_sql('node; out meta;')
+
+
+def test_error_garbage_input():
+    with pytest.raises(OverpassParseError):
+        overpass_to_sql('SELECT * FROM osm_data;')
