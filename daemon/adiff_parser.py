@@ -1,24 +1,52 @@
 """Parse augmented diff XML and extract OSM objects as GeoJSON features."""
 
+import io
+import queue
+import threading
 import xml.sax
 import xml.sax.handler
+
+_SENTINEL = object()
 
 
 def parse_adiff(source):
     """Parse augmented diff XML and yield GeoJSON features for all action types.
 
     Captures create, modify, and delete actions.
-    Uses SAX parsing for constant memory usage regardless of file size.
-    source can be a file-like object (for streaming) or bytes.
+    Uses SAX parsing with a background thread so features can be yielded
+    one at a time without accumulating in memory.
+    source can be a file-like object (for streaming), a file path string,
+    or bytes.
     """
-    handler = _AdiffHandler()
     if isinstance(source, bytes):
-        import io
         source = io.BytesIO(source)
-    parser = xml.sax.make_parser()
-    parser.setContentHandler(handler)
-    parser.parse(source)
-    return handler.features
+
+    q = queue.Queue(maxsize=64)
+
+    def _run():
+        try:
+            handler = _AdiffHandler(emit=lambda f: q.put(f))
+            parser = xml.sax.make_parser()
+            parser.setContentHandler(handler)
+            parser.parse(source)
+        except Exception as exc:
+            q.put(exc)
+        finally:
+            q.put(_SENTINEL)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        thread.join(timeout=5)
 
 
 def _build_geometry(osm_type, attrs, nds, bounds, members=None, tags=None):
@@ -82,8 +110,8 @@ def _build_geometry(osm_type, attrs, nds, bounds, members=None, tags=None):
 class _AdiffHandler(xml.sax.handler.ContentHandler):
     """SAX handler that extracts OSM objects from augmented diffs."""
 
-    def __init__(self):
-        self.features = []
+    def __init__(self, emit=None):
+        self._emit = emit
         self._action_type = None
         self._in_old = False
         self._in_new = False
@@ -266,4 +294,4 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
                 "old_geometry": old_geometry,
             },
         }
-        self.features.append(feature)
+        self._emit(feature)
