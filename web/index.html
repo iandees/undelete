@@ -536,7 +536,11 @@ window.runQuery = async function () {
       currentGeoJSON = null;
     }
   } catch (e) {
-    setStatus("Error: " + e.message, true);
+    let msg = e.message || String(e);
+    if (msg.includes("[object WebAssembly.Exception]") || msg === "undefined") {
+      msg = "Query failed — the Parquet file may not exist yet. Is the daemon running?";
+    }
+    setStatus("Error: " + msg, true);
     console.error(e);
   } finally {
     overlay.classList.remove("visible");
