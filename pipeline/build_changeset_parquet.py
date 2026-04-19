@@ -98,6 +98,16 @@ class ChangesetParquetBuilder:
         if self._mtimes.get(date_str) == mtime:
             return False
 
+        # Read all entries, deduplicating by changeset ID (keep latest version)
+        by_id = {}
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                cs = json.loads(line)
+                by_id[cs["id"]] = cs
+
         ids = []
         created_ats = []
         closed_ats = []
@@ -110,32 +120,26 @@ class ChangesetParquetBuilder:
         geometries = []
         geom_objects = []
 
-        with open(jsonl_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                cs = json.loads(line)
+        for cs in by_id.values():
+            ids.append(cs["id"])
+            created_ats.append(cs["created_at"])
+            closed_ats.append(cs.get("closed_at", ""))
+            opens.append(cs.get("open", False))
+            num_changes_list.append(cs.get("num_changes", 0))
+            users.append(cs.get("user", ""))
+            uids.append(cs.get("uid", 0))
+            comments_counts.append(cs.get("comments_count", 0))
+            tags_list.append(_dict_to_map_items(cs.get("tags") or {}))
 
-                ids.append(cs["id"])
-                created_ats.append(cs["created_at"])
-                closed_ats.append(cs.get("closed_at", ""))
-                opens.append(cs.get("open", False))
-                num_changes_list.append(cs.get("num_changes", 0))
-                users.append(cs.get("user", ""))
-                uids.append(cs.get("uid", 0))
-                comments_counts.append(cs.get("comments_count", 0))
-                tags_list.append(_dict_to_map_items(cs.get("tags") or {}))
+            # Build geometry from bbox if available
+            if cs.get("min_lon") is not None:
+                geom = box(cs["min_lon"], cs["min_lat"], cs["max_lon"], cs["max_lat"])
+            else:
+                # No bbox — use null island point as placeholder
+                geom = shapely.Point(0, 0)
 
-                # Build geometry from bbox if available
-                if cs.get("min_lon") is not None:
-                    geom = box(cs["min_lon"], cs["min_lat"], cs["max_lon"], cs["max_lat"])
-                else:
-                    # No bbox — use null island point as placeholder
-                    geom = shapely.Point(0, 0)
-
-                geometries.append(shapely.to_wkb(geom))
-                geom_objects.append(geom)
+            geometries.append(shapely.to_wkb(geom))
+            geom_objects.append(geom)
 
         if not ids:
             return False
