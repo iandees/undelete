@@ -336,30 +336,30 @@ async function initDuckDB() {
 async function loadMetadata() {
   // Load element changes metadata
   try {
-    const resp = await fetch("/data/parquet/metadata.json");
+    const resp = await fetch("/osm-changes/metadata.json");
     if (!resp.ok) throw new Error("not found");
     metadata = await resp.json();
     if (metadata.base_url) {
       baseParquetUrl = metadata.base_url + "/osm-changes";
     } else {
-      baseParquetUrl = window.location.origin + "/data/parquet";
+      baseParquetUrl = window.location.origin + "/osm-changes";
     }
   } catch {
-    baseParquetUrl = window.location.origin + "/data/parquet";
+    baseParquetUrl = window.location.origin + "/osm-changes";
   }
 
   // Load changeset metadata
   try {
-    const resp = await fetch("/data/changeset_parquet/metadata.json");
+    const resp = await fetch("/osm-changesets/metadata.json");
     if (!resp.ok) throw new Error("not found");
     changesetMetadata = await resp.json();
     if (changesetMetadata.base_url) {
       baseChangesetParquetUrl = changesetMetadata.base_url + "/osm-changesets";
     } else {
-      baseChangesetParquetUrl = window.location.origin + "/data/changeset_parquet";
+      baseChangesetParquetUrl = window.location.origin + "/osm-changesets";
     }
   } catch {
-    baseChangesetParquetUrl = window.location.origin + "/data/changeset_parquet";
+    baseChangesetParquetUrl = window.location.origin + "/osm-changesets";
   }
 
   const dates = (metadata && metadata.dates) || [];
