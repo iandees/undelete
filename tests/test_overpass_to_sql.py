@@ -188,3 +188,36 @@ def test_error_unsupported_out_meta():
 def test_error_garbage_input():
     with pytest.raises(OverpassParseError):
         overpass_to_sql('SELECT * FROM osm_data;')
+
+
+# --- End-to-end integration tests ---
+
+def test_e2e_cafes_in_london():
+    sql = overpass_to_sql('node["amenity"="cafe"](51.28,-0.49,51.69,0.26); out body;')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'amenity')[1] = 'cafe'" in normed
+    assert "ST_Within(geometry, ST_MakeEnvelope(-0.49, 51.28, 0.26, 51.69))" in normed
+    assert "osm_type = 'node'" in normed
+    assert "action != 'delete'" in normed
+
+
+def test_e2e_buildings_union():
+    sql = overpass_to_sql('(node["building"]; way["building"]; relation["building"];); out count;')
+    normed = _normalize(sql)
+    assert normed.count("UNION ALL") == 2
+    assert "SELECT COUNT(*) AS count" in normed
+    assert normed.count("map_contains(tags, 'building')") == 3
+
+
+def test_e2e_restaurants_near_point():
+    sql = overpass_to_sql('nwr["amenity"="restaurant"](around:500,48.8566,2.3522);')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'amenity')[1] = 'restaurant'" in normed
+    assert "ST_DWithin(geometry, ST_Point(2.3522, 48.8566)" in normed
+    assert "osm_type" not in normed.split("FROM latest")[1]
+
+
+def test_e2e_default_output():
+    sql = overpass_to_sql('node["shop"];')
+    normed = _normalize(sql)
+    assert "SELECT *" in normed
