@@ -59,7 +59,7 @@ class ParquetBuilder:
 
         out_dir = self.parquet_dir / f"date={date_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        gdf.to_parquet(out_dir / "data.parquet")
+        gdf.to_parquet(out_dir / "data.parquet", write_covering_bbox=True)
 
         self._mtimes[date_str] = mtime
         return True
