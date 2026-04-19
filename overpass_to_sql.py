@@ -47,7 +47,9 @@ class Query:
 # --- Grammar ---
 
 GRAMMAR = r"""
-    start: statement+ output?
+    start: (statement | union)+ output?
+
+    union: "(" statement+ ")" ";"
 
     statement: osm_type filter* ";"
 
@@ -88,9 +90,14 @@ class OverpassTransformer(Transformer):
         for item in items:
             if isinstance(item, Statement):
                 query.statements.append(item)
+            elif isinstance(item, list):
+                query.statements.extend(item)
             elif isinstance(item, str):
                 query.output_mode = item
         return query
+
+    def union(self, items):
+        return items
 
     def statement(self, items):
         osm_type = items[0]

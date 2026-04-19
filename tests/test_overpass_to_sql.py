@@ -111,3 +111,19 @@ def test_tag_and_bbox():
     normed = _normalize(sql)
     assert "element_at(tags, 'amenity')[1] = 'cafe'" in normed
     assert "ST_Within(geometry, ST_MakeEnvelope(-0.1, 51.5, 0.1, 51.6))" in normed
+
+
+# --- Union blocks ---
+
+def test_union_block():
+    sql = overpass_to_sql('(node["amenity"="cafe"]; way["amenity"="cafe"];);')
+    normed = _normalize(sql)
+    assert "UNION ALL" in normed
+    assert "osm_type = 'node'" in normed
+    assert "osm_type = 'way'" in normed
+
+
+def test_union_three_types():
+    sql = overpass_to_sql('(node["building"]; way["building"]; relation["building"];);')
+    normed = _normalize(sql)
+    assert normed.count("UNION ALL") == 2
