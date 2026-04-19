@@ -500,12 +500,31 @@ window.runQuery = async function () {
     setStatus(`${rows.length} rows in ${elapsed}s`);
     renderTable(rows, columns);
 
-    // If there is a geometry column, render on map
+    // If there is a geometry column, convert via ST_AsGeoJSON and render on map
     const geomCol = columns.find(c => c === "geometry");
     if (geomCol && rows.length > 0) {
-      const geojson = rowsToGeoJSON(rows, geomCol);
-      currentGeoJSON = geojson;
-      renderGeoJSONOnMap(geojson);
+      // Use DuckDB's ST_AsGeoJSON to convert geometry to GeoJSON strings
+      // by wrapping the user query in a CTE
+      try {
+        const geojsonSql = `WITH user_query AS (${sql})
+          SELECT ST_AsGeoJSON(geometry) as __geojson FROM user_query`;
+        const geojsonResult = await conn.query(geojsonSql);
+        const geojsonRows = geojsonResult.toArray();
+        // Attach parsed GeoJSON geometry to each row
+        for (let i = 0; i < Math.min(rows.length, geojsonRows.length); i++) {
+          const gjStr = geojsonRows[i]["__geojson"];
+          if (gjStr) {
+            try { rows[i].__geojson = JSON.parse(gjStr); } catch {}
+          }
+        }
+        const geojson = rowsToGeoJSON(rows);
+        currentGeoJSON = geojson;
+        renderGeoJSONOnMap(geojson);
+      } catch (e) {
+        console.warn("Could not convert geometry for map display:", e);
+        clearMapLayer();
+        currentGeoJSON = null;
+      }
     } else {
       clearMapLayer();
       currentGeoJSON = null;
@@ -527,138 +546,26 @@ document.getElementById("query-editor").addEventListener("keydown", (e) => {
   }
 });
 
-// =========================================================
-// WKB to GeoJSON Parser
-// =========================================================
-function readWKB(buf) {
-  // buf is a Uint8Array — handles standard WKB and EWKB (with SRID, Z, M flags)
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let offset = 0;
 
-  function readByte() { return view.getUint8(offset++); }
-  function readUint32(le) { const v = view.getUint32(offset, le); offset += 4; return v; }
-  function readFloat64(le) { const v = view.getFloat64(offset, le); offset += 8; return v; }
-
-  function readCoord(le, dims) {
-    const x = readFloat64(le);
-    const y = readFloat64(le);
-    // Skip extra dimensions (Z, M) but only return [x, y]
-    for (let i = 2; i < dims; i++) readFloat64(le);
-    return [x, y];
-  }
-
-  function readGeometry() {
-    const byteOrder = readByte();
-    const le = byteOrder === 1;
-    const typeInt = readUint32(le);
-
-    // EWKB: skip SRID if flag 0x20000000 is set
-    const hasSRID = !!(typeInt & 0x20000000);
-    if (hasSRID) readUint32(le);
-
-    // Determine coordinate dimensions
-    const hasZ = !!(typeInt & 0x80000000);
-    const hasM = !!(typeInt & 0x40000000);
-    let dims = 2 + (hasZ ? 1 : 0) + (hasM ? 1 : 0);
-
-    // ISO WKB: types 1001-1004 = Z, 2001-2004 = M, 3001-3004 = ZM
-    const rawType = typeInt & 0xFFFF;
-    let baseType;
-    if (rawType > 3000) { baseType = rawType - 3000; dims = 4; }
-    else if (rawType > 2000) { baseType = rawType - 2000; dims = 3; }
-    else if (rawType > 1000) { baseType = rawType - 1000; dims = 3; }
-    else { baseType = rawType; }
-
-    switch (baseType) {
-      case 1: return { type: "Point", coordinates: readCoord(le, dims) };
-      case 2: return readLineString(le, dims);
-      case 3: return readPolygon(le, dims);
-      case 4: return readMulti(le, "MultiPoint", (g) => g.coordinates);
-      case 5: return readMulti(le, "MultiLineString", (g) => g.coordinates);
-      case 6: return readMulti(le, "MultiPolygon", (g) => g.coordinates);
-      case 7: return readGeometryCollection(le);
-      default: return null;
-    }
-  }
-
-  function readLineString(le, dims) {
-    const n = readUint32(le);
-    const coords = [];
-    for (let i = 0; i < n; i++) coords.push(readCoord(le, dims));
-    return { type: "LineString", coordinates: coords };
-  }
-
-  function readPolygon(le, dims) {
-    const nRings = readUint32(le);
-    const rings = [];
-    for (let i = 0; i < nRings; i++) {
-      const n = readUint32(le);
-      const ring = [];
-      for (let j = 0; j < n; j++) ring.push(readCoord(le, dims));
-      rings.push(ring);
-    }
-    return { type: "Polygon", coordinates: rings };
-  }
-
-  function readMulti(le, type, extract) {
-    const n = readUint32(le);
-    const items = [];
-    for (let i = 0; i < n; i++) {
-      const g = readGeometry();
-      if (g) items.push(extract(g));
-    }
-    return { type, coordinates: items };
-  }
-
-  function readGeometryCollection(le) {
-    const n = readUint32(le);
-    const geoms = [];
-    for (let i = 0; i < n; i++) {
-      const g = readGeometry();
-      if (g) geoms.push(g);
-    }
-    return { type: "GeometryCollection", geometries: geoms };
-  }
-
-  return readGeometry();
-}
-
-function geometryToUint8Array(val) {
-  if (val instanceof Uint8Array) return val;
-  if (val instanceof ArrayBuffer) return new Uint8Array(val);
-  if (val && val.buffer) return new Uint8Array(val.buffer, val.byteOffset, val.byteLength);
-  // DuckDB WASM may return typed arrays or array-like objects
-  if (val && typeof val.length === "number") return new Uint8Array(val);
-  return null;
-}
-
-function rowsToGeoJSON(rows, geomCol) {
+function rowsToGeoJSON(rows) {
   const features = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const raw = row[geomCol];
-    const buf = geometryToUint8Array(raw);
-    if (!buf || buf.length === 0) continue;
-    try {
-      const geometry = readWKB(buf);
-      if (!geometry) continue;
-      const properties = {};
-      for (const [k, v] of Object.entries(row)) {
-        if (k === geomCol || k === "old_geometry") continue;
-        // Convert BigInt and other non-serializable types
-        if (typeof v === "bigint") {
-          properties[k] = Number(v);
-        } else if (v instanceof Uint8Array || v instanceof ArrayBuffer) {
-          properties[k] = "(binary)";
-        } else {
-          properties[k] = v;
-        }
+    const geometry = row.__geojson;
+    if (!geometry) continue;
+    const properties = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (k === "geometry" || k === "old_geometry" || k === "__geojson") continue;
+      if (typeof v === "bigint") {
+        properties[k] = Number(v);
+      } else if (v instanceof Uint8Array || v instanceof ArrayBuffer) {
+        properties[k] = "(binary)";
+      } else {
+        properties[k] = v;
       }
-      properties._rowIdx = i;
-      features.push({ type: "Feature", geometry, properties });
-    } catch (e) {
-      console.warn("WKB parse error row", i, e);
     }
+    properties._rowIdx = i;
+    features.push({ type: "Feature", geometry, properties });
   }
   return { type: "FeatureCollection", features };
 }
