@@ -148,6 +148,11 @@
     .popup-tags { width: 100%; border-collapse: collapse; margin: 6px 0; }
     .popup-tags td { padding: 2px 6px; border-bottom: 1px solid var(--surface1); font-size: 12px; }
     .popup-tags td:first-child { font-weight: 600; color: var(--subtext); white-space: nowrap; }
+    .popup-tags tr.tag-added td { background: rgba(166,227,161,0.15); }
+    .popup-tags tr.tag-removed td { background: rgba(243,139,168,0.15); text-decoration: line-through; }
+    .popup-tags tr.tag-changed td { background: rgba(249,226,175,0.15); }
+    .popup-tags .tag-old-value { text-decoration: line-through; color: var(--subtext); margin-right: 4px; }
+    .popup-tags .tag-arrow { color: var(--subtext); margin: 0 4px; }
 
     /* ---- Resize Handle ---- */
     #resize-handle {
@@ -736,7 +741,40 @@ map.on("click", (e) => {
   if (typeof tags === "string") {
     try { tags = JSON.parse(tags); } catch { tags = null; }
   }
-  if (tags && typeof tags === "object") {
+  let oldTags = props.old_tags;
+  if (typeof oldTags === "string") {
+    try { oldTags = JSON.parse(oldTags); } catch { oldTags = null; }
+  }
+
+  const showDiff = action === "modify" && tags && oldTags
+    && typeof tags === "object" && typeof oldTags === "object";
+
+  if (showDiff) {
+    const newEntries = Object.entries(tags);
+    const oldMap = new Map(Object.entries(oldTags));
+    const allKeys = new Set([...Object.keys(oldTags), ...Object.keys(tags)]);
+    if (allKeys.size > 0) {
+      html += `<table class="popup-tags">`;
+      for (const k of allKeys) {
+        const inOld = oldMap.has(k);
+        const inNew = k in tags;
+        if (inNew && !inOld) {
+          // Added
+          html += `<tr class="tag-added"><td>${escapeHtml(k)}</td><td>${escapeHtml(String(tags[k]))}</td></tr>`;
+        } else if (inOld && !inNew) {
+          // Removed
+          html += `<tr class="tag-removed"><td>${escapeHtml(k)}</td><td>${escapeHtml(String(oldMap.get(k)))}</td></tr>`;
+        } else if (String(tags[k]) !== String(oldMap.get(k))) {
+          // Changed
+          html += `<tr class="tag-changed"><td>${escapeHtml(k)}</td><td><span class="tag-old-value">${escapeHtml(String(oldMap.get(k)))}</span><span class="tag-arrow">&rarr;</span>${escapeHtml(String(tags[k]))}</td></tr>`;
+        } else {
+          // Unchanged
+          html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(tags[k]))}</td></tr>`;
+        }
+      }
+      html += `</table>`;
+    }
+  } else if (tags && typeof tags === "object") {
     const entries = Object.entries(tags);
     if (entries.length > 0) {
       html += `<table class="popup-tags">`;
