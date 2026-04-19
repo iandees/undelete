@@ -1,9 +1,13 @@
-"""Local dev server that serves both the web UI and tile data with CORS and byte range support."""
+"""Local dev server that serves both the web UI and data files with CORS and byte range support."""
 
 import http.server
+import mimetypes
 import os
 import sys
 from pathlib import Path
+
+# Register parquet MIME type
+mimetypes.add_type("application/octet-stream", ".parquet")
 
 
 class CORSRangeHandler(http.server.SimpleHTTPRequestHandler):
@@ -54,6 +58,6 @@ if __name__ == "__main__":
     os.chdir(Path(__file__).parent)
     server = http.server.HTTPServer(("", port), CORSRangeHandler)
     print(f"Serving on http://localhost:{port}")
-    print(f"  Map:    http://localhost:{port}/web/")
-    print(f"  Tiles:  http://localhost:{port}/data/tiles/")
+    print(f"  UI:    http://localhost:{port}/web/")
+    print(f"  Data:  http://localhost:{port}/data/parquet/")
     server.serve_forever()
