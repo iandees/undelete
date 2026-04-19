@@ -42,8 +42,8 @@ class ParquetBuilder:
 
                 rows.append({
                     "action": props["action"],
-                    "osm_type": props["type"],
-                    "osm_id": props["id"],
+                    "osm_type": props["osm_type"],
+                    "osm_id": props["osm_id"],
                     "version": props["version"],
                     "changeset": props["changeset"],
                     "user": props["user"],
