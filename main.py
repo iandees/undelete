@@ -1,6 +1,6 @@
-"""OSM Undelete — main entry point.
+"""OSM Changes — main entry point.
 
-Runs the watcher daemon with periodic tile builds and R2 uploads.
+Runs the watcher daemon with periodic Parquet builds and R2 uploads.
 """
 
 import json
@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from daemon.watcher import Watcher
-from pipeline.build_tiles import TileBuilder
+from pipeline.build_parquet import ParquetBuilder
 from pipeline.merge_upload import R2Uploader
 from pipeline.prune import prune_old_files
 
@@ -27,34 +27,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-POLL_INTERVAL = 60  # seconds between checks for new sequences
+POLL_INTERVAL = 60
 
 
-def write_and_upload_manifest(data_dir: Path, uploader: R2Uploader | None):
-    """Write manifest.json listing all daily tiles and upload it."""
-    daily_tiles = sorted((data_dir / "tiles").glob("????-??-??.pmtiles"))
-    if daily_tiles:
-        manifest = {
-            "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "files": [f.name for f in daily_tiles],
-        }
-        manifest_path = data_dir / "tiles" / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
-        if uploader:
-            logger.debug("Uploading manifest.json")
-            uploader.upload_file(manifest_path, "manifest.json")
-        logger.info("Wrote manifest with %d files", len(daily_tiles))
+def write_and_upload_metadata(data_dir: Path, uploader: R2Uploader | None, r2_public_url: str):
+    """Write metadata.json with available date range and upload it."""
+    parquet_dir = data_dir / "parquet"
+    if not parquet_dir.exists():
+        return
+    date_dirs = sorted(
+        d.name.split("=", 1)[1]
+        for d in parquet_dir.iterdir()
+        if d.is_dir() and d.name.startswith("date=")
+    )
+    if not date_dirs:
+        return
+
+    metadata = {
+        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "base_url": r2_public_url,
+        "min_date": date_dirs[0],
+        "max_date": date_dirs[-1],
+        "dates": date_dirs,
+    }
+    metadata_path = parquet_dir / "metadata.json"
+    metadata_path.write_text(json.dumps(metadata))
+    if uploader:
+        uploader.upload_file(metadata_path, "osm-changes/metadata.json")
+    logger.info("Wrote metadata: %s to %s (%d dates)", date_dirs[0], date_dirs[-1], len(date_dirs))
 
 
 def main():
     data_dir = Path(os.environ.get("DATA_DIR", "./data"))
 
     watcher = Watcher(data_dir)
-    tile_builder = TileBuilder(data_dir / "deletions", data_dir / "tiles")
+    parquet_builder = ParquetBuilder(data_dir / "deletions", data_dir / "parquet")
 
-    # R2 uploader (optional — skip if not configured)
     uploader = None
     r2_endpoint = os.environ.get("R2_ENDPOINT_URL")
+    r2_public_url = os.environ.get("R2_PUBLIC_URL", "")
     if r2_endpoint:
         uploader = R2Uploader(
             endpoint_url=r2_endpoint,
@@ -66,11 +77,9 @@ def main():
     else:
         logger.info("R2 upload disabled (R2_ENDPOINT_URL not set)")
 
-    tile_build_interval = int(os.environ.get("TILE_BUILD_INTERVAL", "600"))
-    today_build_interval = int(os.environ.get("TODAY_BUILD_INTERVAL", "60"))
-    retention_days = int(os.environ.get("TILE_RETENTION_DAYS", "90"))
+    parquet_build_interval = int(os.environ.get("PARQUET_BUILD_INTERVAL", "300"))
+    retention_days = int(os.environ.get("RETENTION_DAYS", "90"))
 
-    # Determine starting sequence
     last_seq = watcher.load_state()
     if last_seq is None:
         last_seq = watcher.get_latest_sequence()
@@ -78,12 +87,10 @@ def main():
     else:
         logger.info("Resuming from saved sequence: %d", last_seq)
 
-    last_tile_build = 0.0
-    last_today_build = 0.0
-    last_today_mtime = 0.0
+    last_parquet_build = 0.0
 
-    logger.info("Starting watcher daemon (poll=%ds, tile_build=%ds, today_build=%ds)",
-                POLL_INTERVAL, tile_build_interval, today_build_interval)
+    logger.info("Starting watcher daemon (poll=%ds, parquet_build=%ds)",
+                POLL_INTERVAL, parquet_build_interval)
 
     next_poll = 0.0
 
@@ -97,87 +104,55 @@ def main():
         next_poll = now + POLL_INTERVAL
         logger.debug("Loop tick: last_seq=%d", last_seq)
 
-        # Poll for new adiffs
         try:
-            logger.debug("Fetching latest sequence number")
             latest_seq = watcher.get_latest_sequence()
-            logger.debug("Latest sequence: %d", latest_seq)
         except Exception:
             logger.exception("Failed to get latest sequence")
-            latest_seq = last_seq  # fall through to tile builds
+            latest_seq = last_seq
 
-        # Process all available sequences before polling again
         while last_seq < latest_seq:
             next_seq = last_seq + 1
             try:
-                logger.debug("Fetching and processing seq %d (latest=%d)", next_seq, latest_seq)
                 count = watcher.fetch_and_process(next_seq)
                 if count is None:
-                    logger.debug("Seq %d not yet available (404), will retry", next_seq)
                     break
-                logger.debug("Processed seq %d: %d deletions", next_seq, count)
                 if count > 0:
-                    logger.info("Seq %d: %d deletions", next_seq, count)
+                    logger.info("Seq %d: %d changes", next_seq, count)
                 last_seq = next_seq
                 watcher.save_state(last_seq)
             except Exception:
                 logger.exception("Failed to process seq %d", next_seq)
                 break
 
-        # Periodic: rebuild today's PMTiles from today's geojsonl
-        if (now - last_today_build) >= today_build_interval:
-            last_today_build = now
+        if (now - last_parquet_build) >= parquet_build_interval:
+            last_parquet_build = now
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                today_geojsonl = data_dir / "deletions" / f"{today_str}.geojsonl"
-                if today_geojsonl.exists():
-                    mtime = today_geojsonl.stat().st_mtime
-                    if mtime > last_today_mtime:
-                        today_pmtiles = data_dir / "tiles" / f"{today_str}.pmtiles"
-                        logger.debug("Building today's tiles: %s", today_pmtiles)
-                        tile_builder.build_tiles(today_geojsonl, today_pmtiles)
-                        if uploader:
-                            logger.debug("Uploading today's tiles: %s", today_str)
-                            uploader.upload_file(today_pmtiles, f"{today_str}.pmtiles")
-                            write_and_upload_manifest(data_dir, uploader)
-                        logger.info("Built and uploaded %s.pmtiles", today_str)
-                        last_today_mtime = mtime
-            except Exception:
-                logger.exception("Failed to build/upload today's tiles")
 
-        # Periodic: build tiles for older days + write manifest
-        if (now - last_tile_build) >= tile_build_interval:
-            last_tile_build = now
-            try:
-                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                logger.debug("Building daily tiles")
-                built = tile_builder.build_daily_tiles()
+                built = parquet_builder.build(today_str)
                 if built:
-                    logger.info("Built tiles for: %s", ", ".join(built))
+                    logger.info("Built parquet for %s", today_str)
                     if uploader:
-                        for date_str in built:
-                            pmtiles_file = data_dir / "tiles" / f"{date_str}.pmtiles"
-                            logger.debug("Uploading %s", pmtiles_file.name)
-                            uploader.upload_file(pmtiles_file, f"{date_str}.pmtiles")
+                        parquet_file = data_dir / "parquet" / f"date={today_str}" / "data.parquet"
+                        uploader.upload_file(parquet_file, f"osm-changes/date={today_str}/data.parquet")
 
-                # Delete geojsonl files for past days that have been tiled
-                for geojsonl in (data_dir / "deletions").glob("*.geojsonl"):
+                for geojsonl in sorted((data_dir / "deletions").glob("*.geojsonl")):
                     date_str = geojsonl.stem
                     if date_str == today_str:
                         continue
-                    pmtiles_file = data_dir / "tiles" / f"{date_str}.pmtiles"
-                    if pmtiles_file.exists():
+                    if parquet_builder.build(date_str):
+                        logger.info("Built parquet for %s", date_str)
+                        if uploader:
+                            pf = data_dir / "parquet" / f"date={date_str}" / "data.parquet"
+                            uploader.upload_file(pf, f"osm-changes/date={date_str}/data.parquet")
                         geojsonl.unlink()
                         logger.info("Cleaned up %s", geojsonl.name)
 
-                # Write and upload manifest
-                write_and_upload_manifest(data_dir, uploader)
-
-                # Prune old pmtiles
-                logger.debug("Pruning old tiles")
-                prune_old_files(data_dir / "tiles", retention_days)
+                write_and_upload_metadata(data_dir, uploader, r2_public_url)
+                prune_old_files(data_dir / "parquet", retention_days)
+                prune_old_files(data_dir / "deletions", retention_days)
             except Exception:
-                logger.exception("Failed to build/upload tiles")
+                logger.exception("Failed to build/upload parquet")
 
 
 if __name__ == "__main__":
