@@ -347,7 +347,7 @@ async function loadMetadata() {
     baseParquetUrl = window.location.origin + "/data/parquet";
     buildExamples(null);
     document.getElementById("query-editor").value =
-      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100;";
+      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
     setStatus("DuckDB ready | No metadata found, use manual URLs");
   }
 }
@@ -357,7 +357,7 @@ function parquetUrl(datePattern) {
 }
 
 function buildDefaultQuery(date) {
-  return `SELECT * FROM read_parquet('${parquetUrl(date)}') LIMIT 100;`;
+  return `SELECT * FROM read_parquet('${parquetUrl(date)}') LIMIT 100`;
 }
 
 // =========================================================
@@ -365,29 +365,34 @@ function buildDefaultQuery(date) {
 // =========================================================
 function buildExamples(latestDate) {
   const d = latestDate || "2025-01-01";
-  const allUrl = parquetUrl("*");
   const dayUrl = parquetUrl(d);
+
+  // Build a list of all date URLs for multi-date queries
+  const allDateUrls = (metadata && metadata.dates)
+    ? metadata.dates.map(dt => parquetUrl(dt))
+    : [dayUrl];
+  const allUrlList = allDateUrls.map(u => `'${u}'`).join(",\n    ");
 
   window._examples = [
     {
       label: "Today's changes (sample)",
       desc: "First 100 rows from the latest date",
-      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nLIMIT 100;`,
+      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nLIMIT 100`,
     },
     {
       label: "Today's deletes",
       desc: "All delete actions from the latest date",
-      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nWHERE action = 'delete';`,
+      sql: `SELECT *\nFROM read_parquet('${dayUrl}')\nWHERE action = 'delete'`,
     },
     {
       label: "Changes by user",
       desc: "Count of changes grouped by user and action",
-      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM read_parquet('${dayUrl}')\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50;`,
+      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM read_parquet('${dayUrl}')\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50`,
     },
     {
-      label: "Deleted buildings (all time)",
+      label: "Deleted buildings (all dates)",
       desc: "Buildings deleted across all available dates",
-      sql: `SELECT *\nFROM read_parquet('${allUrl}', hive_partitioning=true)\nWHERE action = 'delete'\n  AND tags->>'building' IS NOT NULL\nLIMIT 200;`,
+      sql: `SELECT *\nFROM read_parquet([\n    ${allUrlList}\n])\nWHERE action = 'delete'\n  AND tags LIKE '%building%'\nLIMIT 200`,
     },
   ];
 
