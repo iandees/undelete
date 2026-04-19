@@ -30,6 +30,9 @@ logger = logging.getLogger("osm-changes")
 logger.setLevel(logging.DEBUG)
 
 POLL_INTERVAL = 60
+# Max sequences to process per loop tick before yielding for parquet builds.
+# Prevents unbounded memory growth during catch-up.
+MAX_SEQS_PER_TICK = 100
 
 
 def write_and_upload_metadata(
@@ -123,7 +126,8 @@ def main():
             logger.exception("Failed to get latest sequence")
             latest_seq = last_seq
 
-        while last_seq < latest_seq:
+        seqs_processed = 0
+        while last_seq < latest_seq and seqs_processed < MAX_SEQS_PER_TICK:
             next_seq = last_seq + 1
             try:
                 count = watcher.fetch_and_process(next_seq)
@@ -133,6 +137,7 @@ def main():
                     logger.info("Seq %d: %d changes", next_seq, count)
                 last_seq = next_seq
                 watcher.save_state(last_seq)
+                seqs_processed += 1
             except Exception:
                 logger.exception("Failed to process seq %d", next_seq)
                 break
@@ -144,7 +149,8 @@ def main():
             logger.exception("Failed to get latest changeset sequence")
             cs_latest_seq = cs_last_seq
 
-        while cs_last_seq < cs_latest_seq:
+        cs_seqs_processed = 0
+        while cs_last_seq < cs_latest_seq and cs_seqs_processed < MAX_SEQS_PER_TICK:
             cs_next_seq = cs_last_seq + 1
             try:
                 count = cs_watcher.fetch_and_process(cs_next_seq)
@@ -154,9 +160,16 @@ def main():
                     logger.info("Changeset seq %d: %d changesets", cs_next_seq, count)
                 cs_last_seq = cs_next_seq
                 cs_watcher.save_state(cs_last_seq)
+                cs_seqs_processed += 1
             except Exception:
                 logger.exception("Failed to process changeset seq %d", cs_next_seq)
                 break
+
+        # If we're still catching up, skip the sleep and loop immediately
+        still_catching_up = (seqs_processed >= MAX_SEQS_PER_TICK or
+                             cs_seqs_processed >= MAX_SEQS_PER_TICK)
+        if still_catching_up:
+            next_poll = time.time()  # don't sleep, loop immediately
 
         if (now - last_parquet_build) >= parquet_build_interval:
             last_parquet_build = now
