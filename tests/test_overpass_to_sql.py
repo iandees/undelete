@@ -127,3 +127,37 @@ def test_union_three_types():
     sql = overpass_to_sql('(node["building"]; way["building"]; relation["building"];);')
     normed = _normalize(sql)
     assert normed.count("UNION ALL") == 2
+
+
+# --- Output directives ---
+
+def test_out_body():
+    sql = overpass_to_sql('node["building"]; out body;')
+    normed = _normalize(sql)
+    assert "SELECT *" in normed
+
+
+def test_out_geom():
+    sql = overpass_to_sql('node["building"]; out geom;')
+    normed = _normalize(sql)
+    assert "SELECT *" in normed
+
+
+def test_out_center():
+    sql = overpass_to_sql('node["building"]; out center;')
+    normed = _normalize(sql)
+    assert "ST_Centroid(geometry) AS geometry" in normed
+    assert "osm_type, osm_id, tags" in normed
+
+
+def test_out_count():
+    sql = overpass_to_sql('node["building"]; out count;')
+    normed = _normalize(sql)
+    assert "SELECT COUNT(*) AS count" in normed
+
+
+def test_out_tags():
+    sql = overpass_to_sql('node["building"]; out tags;')
+    normed = _normalize(sql)
+    assert "SELECT osm_type, osm_id, tags" in normed
+    assert "geometry" not in normed.split("FROM latest")[1]
