@@ -536,10 +536,7 @@ window.runQuery = async function () {
       currentGeoJSON = null;
     }
   } catch (e) {
-    let msg = e.message || String(e);
-    if (msg.includes("[object WebAssembly.Exception]") || msg === "undefined") {
-      msg = "Query failed — the Parquet file may not exist yet. Is the daemon running?";
-    }
+    let msg = extractErrorMessage(e);
     setStatus("Error: " + msg, true);
     console.error(e);
   } finally {
@@ -859,6 +856,28 @@ function zoomToRow(idx) {
 // =========================================================
 // Status
 // =========================================================
+function extractErrorMessage(e) {
+  // DuckDB WASM wraps errors in various ways — try to extract something useful
+  if (e instanceof WebAssembly.Exception) {
+    // WebAssembly.Exception has getArg(exnType, index) in some browsers
+    if (typeof e.getArg === "function") {
+      try { return e.getArg(WebAssembly.Tag, 0); } catch {}
+    }
+    // Some builds store the message in stack or toString
+    const s = e.stack || e.toString();
+    if (s && s !== "[object WebAssembly.Exception]") return s;
+    return "Query failed — the Parquet file may not exist yet. Is the daemon running?";
+  }
+  // DuckDB often wraps the real error
+  if (e && e.cause) return extractErrorMessage(e.cause);
+  // Check for message property
+  let msg = e?.message || String(e);
+  if (!msg || msg === "undefined" || msg.includes("[object WebAssembly.Exception]")) {
+    return "Query failed — the Parquet file may not exist yet. Is the daemon running?";
+  }
+  return msg;
+}
+
 function setStatus(msg, isError) {
   const el = document.getElementById("status-left");
   el.textContent = msg;
