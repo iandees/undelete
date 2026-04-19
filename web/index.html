@@ -279,6 +279,7 @@ let baseParquetUrl = null;
 let currentResults = []; // array of row objects
 let currentGeoJSON = null; // FeatureCollection
 let highlightedRowIdx = null;
+let currentPopup = null;
 
 const map = new maplibregl.Map({
   container: "map",
@@ -598,7 +599,10 @@ function rowsToGeoJSON(rows) {
 // Map Rendering
 // =========================================================
 function clearMapLayer() {
-  for (const id of ["results-points", "results-lines", "results-polygons", "results-points-highlight"]) {
+  for (const id of [
+    "results-points-highlight", "results-lines-highlight", "results-polygons-highlight",
+    "results-points", "results-lines", "results-polygons"
+  ]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
   if (map.getSource("results")) map.removeSource("results");
@@ -670,6 +674,45 @@ function renderGeoJSONOnMap(geojson) {
     },
   });
 
+  // Highlight layers (hidden by default via impossible filter)
+  const noMatchFilter = ["==", ["get", "_rowIdx"], -1];
+
+  map.addLayer({
+    id: "results-polygons-highlight",
+    type: "fill",
+    source: "results",
+    filter: noMatchFilter,
+    paint: {
+      "fill-color": "#cdd6f4",
+      "fill-opacity": 0.45,
+      "fill-outline-color": "#cdd6f4",
+    },
+  });
+
+  map.addLayer({
+    id: "results-lines-highlight",
+    type: "line",
+    source: "results",
+    filter: noMatchFilter,
+    paint: {
+      "line-color": "#cdd6f4",
+      "line-width": 5,
+    },
+  });
+
+  map.addLayer({
+    id: "results-points-highlight",
+    type: "circle",
+    source: "results",
+    filter: noMatchFilter,
+    paint: {
+      "circle-radius": 10,
+      "circle-color": "#cdd6f4",
+      "circle-stroke-width": 2,
+      "circle-stroke-color": "#1e1e2e",
+    },
+  });
+
   // Fit bounds
   if (geojson.features.length > 0) {
     const bounds = new maplibregl.LngLatBounds();
@@ -702,20 +745,8 @@ function expandBounds(bounds, geom) {
   }
 }
 
-// Map click popup
-map.on("click", (e) => {
-  const layers = ["results-points", "results-lines", "results-polygons"].filter(id => map.getLayer(id));
-  if (layers.length === 0) return;
-  const features = map.queryRenderedFeatures(e.point, { layers });
-  if (features.length === 0) return;
-
-  const props = features[0].properties;
-  const rowIdx = props._rowIdx;
-
-  // Highlight corresponding table row
-  highlightTableRow(rowIdx);
-
-  // Build popup HTML
+// Build popup HTML from feature properties
+function buildPopupHTML(props) {
   let html = "";
   const osmType = props.osm_type || "";
   const osmId = props.osm_id || "";
@@ -750,7 +781,6 @@ map.on("click", (e) => {
     && typeof tags === "object" && typeof oldTags === "object";
 
   if (showDiff) {
-    const newEntries = Object.entries(tags);
     const oldMap = new Map(Object.entries(oldTags));
     const allKeys = new Set([...Object.keys(oldTags), ...Object.keys(tags)]);
     if (allKeys.size > 0) {
@@ -759,16 +789,12 @@ map.on("click", (e) => {
         const inOld = oldMap.has(k);
         const inNew = k in tags;
         if (inNew && !inOld) {
-          // Added
           html += `<tr class="tag-added"><td>${escapeHtml(k)}</td><td>${escapeHtml(String(tags[k]))}</td></tr>`;
         } else if (inOld && !inNew) {
-          // Removed
           html += `<tr class="tag-removed"><td>${escapeHtml(k)}</td><td>${escapeHtml(String(oldMap.get(k)))}</td></tr>`;
         } else if (String(tags[k]) !== String(oldMap.get(k))) {
-          // Changed
           html += `<tr class="tag-changed"><td>${escapeHtml(k)}</td><td><span class="tag-old-value">${escapeHtml(String(oldMap.get(k)))}</span><span class="tag-arrow">&rarr;</span>${escapeHtml(String(tags[k]))}</td></tr>`;
         } else {
-          // Unchanged
           html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(tags[k]))}</td></tr>`;
         }
       }
@@ -785,10 +811,85 @@ map.on("click", (e) => {
     }
   }
 
-  new maplibregl.Popup({ maxWidth: "420px" })
-    .setLngLat(e.lngLat)
+  return html;
+}
+
+// Get centroid LngLat for a feature geometry
+function featureCentroid(geometry) {
+  const bounds = new maplibregl.LngLatBounds();
+  expandBounds(bounds, geometry);
+  return bounds.getCenter();
+}
+
+// Update highlight layer filters to show only the selected feature
+function setMapHighlight(rowIdx) {
+  const filter = rowIdx != null
+    ? ["==", ["get", "_rowIdx"], rowIdx]
+    : ["==", ["get", "_rowIdx"], -1];
+  for (const id of ["results-points-highlight", "results-lines-highlight", "results-polygons-highlight"]) {
+    if (map.getLayer(id)) map.setFilter(id, filter);
+  }
+}
+
+// Select a feature: highlight on map, highlight table row, show popup
+function selectFeature(rowIdx, lngLat) {
+  if (!currentGeoJSON) return;
+  const feature = currentGeoJSON.features.find(f => f.properties._rowIdx === rowIdx);
+  if (!feature) return;
+
+  // Close existing popup without triggering deselect
+  if (currentPopup) {
+    const old = currentPopup;
+    currentPopup = null;
+    old.remove();
+  }
+
+  // Highlight map feature
+  setMapHighlight(rowIdx);
+
+  // Highlight table row
+  highlightTableRow(rowIdx);
+
+  // Determine popup position
+  const popupLngLat = lngLat || featureCentroid(feature.geometry);
+
+  // Show popup
+  const html = buildPopupHTML(feature.properties);
+  const popup = new maplibregl.Popup({ maxWidth: "420px" })
+    .setLngLat(popupLngLat)
     .setHTML(html)
+    .on("close", () => {
+      if (currentPopup === popup) deselectFeature();
+    })
     .addTo(map);
+  currentPopup = popup;
+}
+
+// Deselect: clear popup, table highlight, and map highlight
+function deselectFeature() {
+  if (currentPopup) {
+    const old = currentPopup;
+    currentPopup = null;
+    old.remove();
+  }
+  setMapHighlight(null);
+  const tbody = document.querySelector("#results-table tbody");
+  const prev = tbody.querySelector("tr.highlighted");
+  if (prev) prev.classList.remove("highlighted");
+  highlightedRowIdx = null;
+}
+
+// Map click
+map.on("click", (e) => {
+  const layers = ["results-points-highlight", "results-lines-highlight", "results-polygons-highlight",
+                  "results-points", "results-lines", "results-polygons"].filter(id => map.getLayer(id));
+  if (layers.length === 0) return;
+  const features = map.queryRenderedFeatures(e.point, { layers });
+  if (features.length === 0) {
+    deselectFeature();
+    return;
+  }
+  selectFeature(features[0].properties._rowIdx, e.lngLat);
 });
 
 // =========================================================
@@ -833,10 +934,14 @@ function renderTable(rows, columns) {
       tr.appendChild(td);
     }
 
-    // Click row to zoom to feature
+    // Click row to select feature (highlight + popup + zoom)
     tr.addEventListener("click", () => {
-      highlightTableRow(i);
-      zoomToRow(i);
+      if (highlightedRowIdx === i) {
+        deselectFeature();
+      } else {
+        zoomToRow(i);
+        selectFeature(i);
+      }
     });
 
     tbody.appendChild(tr);
