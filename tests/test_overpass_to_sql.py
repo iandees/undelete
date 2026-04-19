@@ -221,3 +221,11 @@ def test_e2e_default_output():
     sql = overpass_to_sql('node["shop"];')
     normed = _normalize(sql)
     assert "SELECT *" in normed
+
+
+# --- Negative number support ---
+
+def test_bbox_negative_coords():
+    sql = overpass_to_sql('node(-33.9,-18.5,-33.8,-18.4);')
+    normed = _normalize(sql)
+    assert "ST_Within(geometry, ST_MakeEnvelope(-18.5, -33.9, -18.4, -33.8))" in normed
