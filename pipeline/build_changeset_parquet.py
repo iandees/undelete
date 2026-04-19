@@ -98,7 +98,9 @@ class ChangesetParquetBuilder:
         if self._mtimes.get(date_str) == mtime:
             return False
 
-        # Read all entries, deduplicating by changeset ID (keep latest version)
+        # Read all entries, deduplicating by changeset ID (keep latest version).
+        # We stream the file but must keep the dedup dict since the same
+        # changeset can appear multiple times across replication files.
         by_id = {}
         with open(jsonl_path) as f:
             for line in f:
@@ -108,106 +110,103 @@ class ChangesetParquetBuilder:
                 cs = json.loads(line)
                 by_id[cs["id"]] = cs
 
-        ids = []
-        created_ats = []
-        closed_ats = []
-        opens = []
-        num_changes_list = []
-        users = []
-        uids = []
-        comments_counts = []
-        tags_list = []
-        geometries = []
-        geom_objects = []
-
-        for cs in by_id.values():
-            ids.append(cs["id"])
-            created_ats.append(cs["created_at"])
-            closed_ats.append(cs.get("closed_at", ""))
-            opens.append(cs.get("open", False))
-            num_changes_list.append(cs.get("num_changes", 0))
-            users.append(cs.get("user", ""))
-            uids.append(cs.get("uid", 0))
-            comments_counts.append(cs.get("comments_count", 0))
-            tags_list.append(_dict_to_map_items(cs.get("tags") or {}))
-
-            # Build geometry from bbox if available
-            if cs.get("min_lon") is not None:
-                geom = box(cs["min_lon"], cs["min_lat"], cs["max_lon"], cs["max_lat"])
-            else:
-                # No bbox — use null island point as placeholder
-                geom = shapely.Point(0, 0)
-
-            geometries.append(shapely.to_wkb(geom))
-            geom_objects.append(geom)
-
-        if not ids:
+        if not by_id:
             return False
-
-        # Hilbert sort for spatial clustering
-        import geopandas as gpd
-        hilbert_distances = gpd.GeoSeries(geom_objects).hilbert_distance()
-        sort_idx = hilbert_distances.argsort().tolist()
-
-        # Apply sort order
-        ids = [ids[i] for i in sort_idx]
-        created_ats = [created_ats[i] for i in sort_idx]
-        closed_ats = [closed_ats[i] for i in sort_idx]
-        opens = [opens[i] for i in sort_idx]
-        num_changes_list = [num_changes_list[i] for i in sort_idx]
-        users = [users[i] for i in sort_idx]
-        uids = [uids[i] for i in sort_idx]
-        comments_counts = [comments_counts[i] for i in sort_idx]
-        tags_list = [tags_list[i] for i in sort_idx]
-        geometries = [geometries[i] for i in sort_idx]
-        geom_objects = [geom_objects[i] for i in sort_idx]
-
-        # Compute bbox for each geometry
-        bboxes = []
-        geometry_types = set()
-        for geom in geom_objects:
-            bounds = geom.bounds
-            bboxes.append({"xmin": bounds[0], "ymin": bounds[1], "xmax": bounds[2], "ymax": bounds[3]})
-            geometry_types.add(geom.geom_type)
-
-        table = pa.table(
-            {
-                "id": pa.array(ids, type=pa.int64()),
-                "created_at": pa.array(created_ats, type=pa.string()),
-                "closed_at": pa.array(closed_ats, type=pa.string()),
-                "open": pa.array(opens, type=pa.bool_()),
-                "num_changes": pa.array(num_changes_list, type=pa.int32()),
-                "user": pa.array(users, type=pa.string()),
-                "uid": pa.array(uids, type=pa.int64()),
-                "comments_count": pa.array(comments_counts, type=pa.int32()),
-                "tags": pa.array(tags_list, type=pa.map_(pa.string(), pa.string())),
-                "geometry": pa.array(geometries, type=pa.binary()),
-                "bbox": pa.array(bboxes, type=pa.struct([
-                    ("xmin", pa.float64()),
-                    ("xmax", pa.float64()),
-                    ("ymin", pa.float64()),
-                    ("ymax", pa.float64()),
-                ])),
-            },
-            schema=CHANGESET_PARQUET_SCHEMA,
-        )
-
-        geo_meta = _build_geo_metadata(geometry_types)
-        existing_meta = table.schema.metadata or {}
-        new_meta = {**existing_meta, b"geo": geo_meta.encode("utf-8")}
-        table = table.replace_schema_metadata(new_meta)
 
         out_dir = self.parquet_dir / f"date={date_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "data.parquet"
-        pq.write_table(
-            table,
-            out_path,
-            compression="zstd",
-            row_group_size=ROW_GROUP_SIZE,
-        )
 
-        n_groups = (len(ids) + ROW_GROUP_SIZE - 1) // ROW_GROUP_SIZE
+        # Process in chunks to limit peak memory
+        import geopandas as gpd
+
+        all_ids = list(by_id.keys())
+        # Free the values we've already grabbed keys for — we'll pop as we go
+        total = len(all_ids)
+        n_groups = 0
+        all_geometry_types = set()
+        writer = None
+
+        try:
+            for chunk_start in range(0, total, ROW_GROUP_SIZE):
+                chunk_keys = all_ids[chunk_start:chunk_start + ROW_GROUP_SIZE]
+
+                rows = []
+                geom_objects = []
+                for cid in chunk_keys:
+                    cs = by_id.pop(cid)  # pop to free memory as we go
+                    if cs.get("min_lon") is not None:
+                        geom = box(cs["min_lon"], cs["min_lat"], cs["max_lon"], cs["max_lat"])
+                    else:
+                        geom = shapely.Point(0, 0)
+
+                    rows.append((
+                        cs["id"],
+                        cs["created_at"],
+                        cs.get("closed_at", ""),
+                        cs.get("open", False),
+                        cs.get("num_changes", 0),
+                        cs.get("user", ""),
+                        cs.get("uid", 0),
+                        cs.get("comments_count", 0),
+                        _dict_to_map_items(cs.get("tags") or {}),
+                        shapely.to_wkb(geom),
+                    ))
+                    geom_objects.append(geom)
+
+                # Hilbert sort within chunk
+                hilbert_distances = gpd.GeoSeries(geom_objects).hilbert_distance()
+                sort_idx = hilbert_distances.argsort().tolist()
+                del hilbert_distances
+                rows = [rows[i] for i in sort_idx]
+                geom_objects = [geom_objects[i] for i in sort_idx]
+                del sort_idx
+
+                bboxes = []
+                geometry_types = set()
+                for geom in geom_objects:
+                    bounds = geom.bounds
+                    bboxes.append({"xmin": bounds[0], "ymin": bounds[1], "xmax": bounds[2], "ymax": bounds[3]})
+                    geometry_types.add(geom.geom_type)
+                all_geometry_types.update(geometry_types)
+                del geom_objects
+
+                table = pa.table(
+                    {
+                        "id": pa.array([r[0] for r in rows], type=pa.int64()),
+                        "created_at": pa.array([r[1] for r in rows], type=pa.string()),
+                        "closed_at": pa.array([r[2] for r in rows], type=pa.string()),
+                        "open": pa.array([r[3] for r in rows], type=pa.bool_()),
+                        "num_changes": pa.array([r[4] for r in rows], type=pa.int32()),
+                        "user": pa.array([r[5] for r in rows], type=pa.string()),
+                        "uid": pa.array([r[6] for r in rows], type=pa.int64()),
+                        "comments_count": pa.array([r[7] for r in rows], type=pa.int32()),
+                        "tags": pa.array([r[8] for r in rows], type=pa.map_(pa.string(), pa.string())),
+                        "geometry": pa.array([r[9] for r in rows], type=pa.binary()),
+                        "bbox": pa.array(bboxes, type=pa.struct([
+                            ("xmin", pa.float64()),
+                            ("xmax", pa.float64()),
+                            ("ymin", pa.float64()),
+                            ("ymax", pa.float64()),
+                        ])),
+                    },
+                    schema=CHANGESET_PARQUET_SCHEMA,
+                )
+                del rows, bboxes
+
+                if writer is None:
+                    geo_meta = _build_geo_metadata(all_geometry_types)
+                    meta = {b"geo": geo_meta.encode("utf-8")}
+                    schema = table.schema.with_metadata(meta)
+                    writer = pq.ParquetWriter(out_path, schema, compression="zstd")
+
+                writer.write_table(table)
+                n_groups += 1
+                del table
+        finally:
+            if writer is not None:
+                writer.close()
+
         self._mtimes[date_str] = mtime
-        logger.info("Built %s (%d changesets, %d row groups)", out_path, len(ids), n_groups)
+        logger.info("Built %s (%d changesets, %d row groups)", out_path, total, n_groups)
         return True

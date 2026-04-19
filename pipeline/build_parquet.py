@@ -94,6 +94,96 @@ class ParquetBuilder:
         self.parquet_dir = Path(parquet_dir)
         self._mtimes: dict[str, float] = {}
 
+    def _read_chunk(self, f, chunk_size):
+        """Read up to chunk_size features from an open GEOJSONL file.
+
+        Returns (rows, geom_objects) where rows is a list of parsed row tuples
+        and geom_objects is a list of shapely geometry objects.
+        Returns empty lists at EOF.
+        """
+        rows = []
+        geom_objects = []
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            feature = json.loads(line)
+            props = feature["properties"]
+            geom = shape(feature["geometry"])
+
+            old_geom_dict = props.get("old_geometry")
+            old_wkb = shapely.to_wkb(shape(old_geom_dict)) if old_geom_dict is not None else None
+
+            rows.append((
+                props["action"],
+                props["osm_type"],
+                props["osm_id"],
+                props["version"],
+                props["changeset"],
+                props["user"],
+                props["uid"],
+                props["timestamp"],
+                _dict_to_map_items(props.get("tags") or {}),
+                _dict_to_map_items(props["old_tags"]) if props.get("old_tags") else None,
+                shapely.to_wkb(geom),
+                old_wkb,
+            ))
+            geom_objects.append(geom)
+
+            if len(rows) >= chunk_size:
+                break
+        return rows, geom_objects
+
+    def _chunk_to_table(self, rows, geom_objects):
+        """Convert a chunk of rows + geom_objects into a sorted PyArrow table.
+
+        Returns (table, geometry_types).
+        """
+        import geopandas as gpd
+
+        # Hilbert sort for spatial clustering
+        hilbert_distances = gpd.GeoSeries(geom_objects).hilbert_distance()
+        sort_idx = hilbert_distances.argsort().tolist()
+        del hilbert_distances
+
+        rows = [rows[i] for i in sort_idx]
+        geom_objects = [geom_objects[i] for i in sort_idx]
+        del sort_idx
+
+        # Compute bbox and collect geometry types
+        bboxes = []
+        geometry_types = set()
+        for geom in geom_objects:
+            bounds = geom.bounds
+            bboxes.append({"xmin": bounds[0], "ymin": bounds[1], "xmax": bounds[2], "ymax": bounds[3]})
+            geometry_types.add(geom.geom_type)
+        del geom_objects
+
+        table = pa.table(
+            {
+                "action": pa.array([r[0] for r in rows], type=pa.string()),
+                "osm_type": pa.array([r[1] for r in rows], type=pa.string()),
+                "osm_id": pa.array([r[2] for r in rows], type=pa.int64()),
+                "version": pa.array([r[3] for r in rows], type=pa.int32()),
+                "changeset": pa.array([r[4] for r in rows], type=pa.int64()),
+                "user": pa.array([r[5] for r in rows], type=pa.string()),
+                "uid": pa.array([r[6] for r in rows], type=pa.int64()),
+                "timestamp": pa.array([r[7] for r in rows], type=pa.string()),
+                "tags": pa.array([r[8] for r in rows], type=pa.map_(pa.string(), pa.string())),
+                "old_tags": pa.array([r[9] for r in rows], type=pa.map_(pa.string(), pa.string())),
+                "geometry": pa.array([r[10] for r in rows], type=pa.binary()),
+                "old_geometry": pa.array([r[11] for r in rows], type=pa.binary()),
+                "bbox": pa.array(bboxes, type=pa.struct([
+                    ("xmin", pa.float64()),
+                    ("xmax", pa.float64()),
+                    ("ymin", pa.float64()),
+                    ("ymax", pa.float64()),
+                ])),
+            },
+            schema=PARQUET_SCHEMA,
+        )
+        return table, geometry_types
+
     def build(self, date_str: str) -> bool:
         geojsonl_path = self.geojsonl_dir / f"{date_str}.geojsonl"
 
@@ -104,124 +194,45 @@ class ParquetBuilder:
         if self._mtimes.get(date_str) == mtime:
             return False
 
-        # Parse all features
-        actions = []
-        osm_types = []
-        osm_ids = []
-        versions = []
-        changesets = []
-        users = []
-        uids = []
-        timestamps = []
-        tags_list = []
-        old_tags_list = []
-        geometries = []
-        old_geometries = []
-        geom_objects = []  # shapely objects for Hilbert sorting
-
-        with open(geojsonl_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                feature = json.loads(line)
-                props = feature["properties"]
-                geom = shape(feature["geometry"])
-
-                actions.append(props["action"])
-                osm_types.append(props["osm_type"])
-                osm_ids.append(props["osm_id"])
-                versions.append(props["version"])
-                changesets.append(props["changeset"])
-                users.append(props["user"])
-                uids.append(props["uid"])
-                timestamps.append(props["timestamp"])
-                tags_list.append(_dict_to_map_items(props.get("tags") or {}))
-                old_tags_list.append(_dict_to_map_items(props["old_tags"]) if props.get("old_tags") else None)
-                geometries.append(shapely.to_wkb(geom))
-
-                old_geom_dict = props.get("old_geometry")
-                if old_geom_dict is not None:
-                    old_geometries.append(shapely.to_wkb(shape(old_geom_dict)))
-                else:
-                    old_geometries.append(None)
-
-                geom_objects.append(geom)
-
-        if not actions:
-            return False
-
-        # Hilbert sort for spatial clustering
-        import geopandas as gpd
-        hilbert_distances = gpd.GeoSeries(geom_objects).hilbert_distance()
-        sort_idx = hilbert_distances.argsort().tolist()
-
-        # Apply sort order to all columns
-        actions = [actions[i] for i in sort_idx]
-        osm_types = [osm_types[i] for i in sort_idx]
-        osm_ids = [osm_ids[i] for i in sort_idx]
-        versions = [versions[i] for i in sort_idx]
-        changesets = [changesets[i] for i in sort_idx]
-        users = [users[i] for i in sort_idx]
-        uids = [uids[i] for i in sort_idx]
-        timestamps = [timestamps[i] for i in sort_idx]
-        tags_list = [tags_list[i] for i in sort_idx]
-        old_tags_list = [old_tags_list[i] for i in sort_idx]
-        geometries = [geometries[i] for i in sort_idx]
-        old_geometries = [old_geometries[i] for i in sort_idx]
-        geom_objects = [geom_objects[i] for i in sort_idx]
-
-        # Compute bbox for each geometry
-        bboxes = []
-        geometry_types = set()
-        for geom in geom_objects:
-            bounds = geom.bounds  # (minx, miny, maxx, maxy)
-            bboxes.append({"xmin": bounds[0], "ymin": bounds[1], "xmax": bounds[2], "ymax": bounds[3]})
-            geometry_types.add(geom.geom_type)
-
-        # Build pyarrow table
-        table = pa.table(
-            {
-                "action": pa.array(actions, type=pa.string()),
-                "osm_type": pa.array(osm_types, type=pa.string()),
-                "osm_id": pa.array(osm_ids, type=pa.int64()),
-                "version": pa.array(versions, type=pa.int32()),
-                "changeset": pa.array(changesets, type=pa.int64()),
-                "user": pa.array(users, type=pa.string()),
-                "uid": pa.array(uids, type=pa.int64()),
-                "timestamp": pa.array(timestamps, type=pa.string()),
-                "tags": pa.array(tags_list, type=pa.map_(pa.string(), pa.string())),
-                "old_tags": pa.array(old_tags_list, type=pa.map_(pa.string(), pa.string())),
-                "geometry": pa.array(geometries, type=pa.binary()),
-                "old_geometry": pa.array(old_geometries, type=pa.binary()),
-                "bbox": pa.array(bboxes, type=pa.struct([
-                    ("xmin", pa.float64()),
-                    ("xmax", pa.float64()),
-                    ("ymin", pa.float64()),
-                    ("ymax", pa.float64()),
-                ])),
-            },
-            schema=PARQUET_SCHEMA,
-        )
-
-        # Add GeoParquet metadata to the schema
-        geo_meta = _build_geo_metadata(geometry_types)
-        existing_meta = table.schema.metadata or {}
-        new_meta = {**existing_meta, b"geo": geo_meta.encode("utf-8")}
-        table = table.replace_schema_metadata(new_meta)
-
-        # Write
         out_dir = self.parquet_dir / f"date={date_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "data.parquet"
-        pq.write_table(
-            table,
-            out_path,
-            compression="zstd",
-            row_group_size=ROW_GROUP_SIZE,
-        )
 
-        n_groups = (len(actions) + ROW_GROUP_SIZE - 1) // ROW_GROUP_SIZE
+        total_features = 0
+        n_groups = 0
+        all_geometry_types = set()
+        writer = None
+
+        try:
+            with open(geojsonl_path) as f:
+                while True:
+                    rows, geom_objects = self._read_chunk(f, ROW_GROUP_SIZE)
+                    if not rows:
+                        break
+
+                    table, geometry_types = self._chunk_to_table(rows, geom_objects)
+                    all_geometry_types.update(geometry_types)
+                    del rows, geom_objects
+
+                    if writer is None:
+                        # Add GeoParquet metadata — will be finalized on close
+                        geo_meta = _build_geo_metadata(all_geometry_types)
+                        meta = {b"geo": geo_meta.encode("utf-8")}
+                        schema = table.schema.with_metadata(meta)
+                        writer = pq.ParquetWriter(out_path, schema, compression="zstd")
+
+                    writer.write_table(table)
+                    total_features += len(table)
+                    n_groups += 1
+                    del table
+        finally:
+            if writer is not None:
+                # Update geo metadata with all geometry types seen across chunks
+                writer.close()
+
+        if total_features == 0:
+            return False
+
         self._mtimes[date_str] = mtime
-        logger.info("Built %s (%d features, %d row groups)", out_path, len(actions), n_groups)
+        logger.info("Built %s (%d features, %d row groups)", out_path, total_features, n_groups)
         return True
