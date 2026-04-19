@@ -6,6 +6,9 @@ dependencies = [
     "requests",
     "boto3",
     "python-dotenv",
+    "geopandas",
+    "pyarrow",
+    "shapely",
 ]
 
 [dependency-groups]
