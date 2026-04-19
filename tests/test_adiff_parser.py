@@ -72,8 +72,9 @@ def test_parse_delete_node():
     assert p["user"] == "deleter1"
     assert p["uid"] == 3002
     assert p["timestamp"] == "2025-01-12T12:00:00Z"
-    assert p["tags"] == {"name": "Deleted Place"}
-    assert p["old_tags"] is None
+    # After delete: no current tags, old_tags has pre-deletion state
+    assert p["tags"] == {}
+    assert p["old_tags"] == {"name": "Deleted Place"}
     assert p["old_geometry"] is None
 
 
@@ -168,7 +169,8 @@ def test_parse_delete_boundary_relation():
     p = f["properties"]
     assert p["action"] == "delete"
     assert p["osm_type"] == "relation"
-    assert p["tags"] == {"type": "boundary", "boundary": "administrative"}
+    assert p["tags"] == {}
+    assert p["old_tags"] == {"type": "boundary", "boundary": "administrative"}
 
     geom = f["geometry"]
     assert geom["type"] == "MultiPolygon"

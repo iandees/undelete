@@ -236,8 +236,10 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
                 return
             # Use old attrs for version (last visible), new attrs for who/when
             attrs = self._new_attrs
-            tags = self._old_tags
-            old_tags = None
+            # After a delete, the element is gone (no current tags),
+            # old_tags holds what it had before deletion
+            tags = {}
+            old_tags = self._old_tags if self._old_tags else {}
             old_geometry = None
             # For delete, version comes from old (last visible version)
             version = int(self._old_attrs.get("version", 0))

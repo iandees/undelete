@@ -81,7 +81,8 @@ def test_fetch_and_process(tmp_path):
 
     delete_feat = [f for f in features if f["properties"]["action"] == "delete"][0]
     assert delete_feat["properties"]["osm_id"] == 12345
-    assert delete_feat["properties"]["tags"]["name"] == "Deleted Node"
+    assert delete_feat["properties"]["tags"] == {}
+    assert delete_feat["properties"]["old_tags"]["name"] == "Deleted Node"
 
     modify_feat = [f for f in features if f["properties"]["action"] == "modify"][0]
     assert modify_feat["properties"]["osm_id"] == 67890
