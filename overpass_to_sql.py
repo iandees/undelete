@@ -59,6 +59,11 @@ GRAMMAR = r"""
     filter: tag_filter
 
     tag_filter: "[" ESCAPED_STRING "]" -> tag_exists
+             | "[" ESCAPED_STRING "=" ESCAPED_STRING "]" -> tag_eq
+             | "[" ESCAPED_STRING "!=" ESCAPED_STRING "]" -> tag_neq
+             | "[" ESCAPED_STRING "~" ESCAPED_STRING "]" -> tag_regex
+             | "[" ESCAPED_STRING "!~" ESCAPED_STRING "]" -> tag_nregex
+             | "[" ESCAPED_STRING "~" ESCAPED_STRING "," "i" "]" -> tag_regex_i
 
     output: "out" OUTPUT_MODE ";"
     OUTPUT_MODE: "body" | "geom" | "center" | "count" | "tags"
@@ -110,6 +115,21 @@ class OverpassTransformer(Transformer):
     def tag_exists(self, items):
         key = items[0][1:-1]  # strip quotes
         return TagFilter(key=key, op="exists")
+
+    def tag_eq(self, items):
+        return TagFilter(key=items[0][1:-1], op="=", value=items[1][1:-1])
+
+    def tag_neq(self, items):
+        return TagFilter(key=items[0][1:-1], op="!=", value=items[1][1:-1])
+
+    def tag_regex(self, items):
+        return TagFilter(key=items[0][1:-1], op="~", value=items[1][1:-1])
+
+    def tag_nregex(self, items):
+        return TagFilter(key=items[0][1:-1], op="!~", value=items[1][1:-1])
+
+    def tag_regex_i(self, items):
+        return TagFilter(key=items[0][1:-1], op="~", value=items[1][1:-1], case_insensitive=True)
 
     def output(self, items):
         return str(items[0])

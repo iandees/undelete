@@ -48,3 +48,45 @@ def test_tag_exists():
     normed = _normalize(sql)
     assert "map_contains(tags, 'building')" in normed
     assert "osm_type = 'node'" in normed
+
+
+# --- Tag value filters ---
+
+def test_tag_equals():
+    sql = overpass_to_sql('node["amenity"="cafe"];')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'amenity')[1] = 'cafe'" in normed
+
+
+def test_tag_not_equals():
+    sql = overpass_to_sql('node["amenity"!="cafe"];')
+    normed = _normalize(sql)
+    assert "(NOT map_contains(tags, 'amenity') OR element_at(tags, 'amenity')[1] != 'cafe')" in normed
+
+
+def test_tag_regex():
+    sql = overpass_to_sql('node["name"~"^Mc"];')
+    normed = _normalize(sql)
+    assert "regexp_matches(element_at(tags, 'name')[1], '^Mc')" in normed
+
+
+def test_tag_regex_negated():
+    sql = overpass_to_sql('node["name"!~"^Mc"];')
+    normed = _normalize(sql)
+    assert "NOT regexp_matches(element_at(tags, 'name')[1], '^Mc')" in normed
+
+
+def test_tag_regex_case_insensitive():
+    sql = overpass_to_sql('node["name"~"cafe",i];')
+    normed = _normalize(sql)
+    assert "regexp_matches(element_at(tags, 'name')[1], '(?i)cafe')" in normed
+
+
+def test_multiple_tag_filters():
+    sql = overpass_to_sql('node["amenity"="cafe"]["cuisine"="italian"];')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'amenity')[1] = 'cafe'" in normed
+    assert "element_at(tags, 'cuisine')[1] = 'italian'" in normed
+    # Both conditions should be ANDed
+    where_part = normed.split("WHERE")[2]  # second WHERE (after CTE)
+    assert " AND " in where_part
