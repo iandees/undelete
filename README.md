@@ -1,21 +1,19 @@
 # OSM Undelete
 
-A system that watches OpenStreetMap augmented diffs, extracts deleted objects, and presents them on an interactive map. Users can browse recent deletions, inspect tags and metadata, and download deleted objects to re-add them via JOSM or other editors.
+A system that watches OpenStreetMap augmented diffs, extracts changes (creates, modifies, and deletes), and presents them on an interactive map. Users can browse recent changes, inspect tags and metadata, and use the built-in SQL query editor to filter by action type, tags, area, and more.
 
 ## How it works
 
 1. A Python daemon polls [augmented diffs](https://adiffs.osmcha.org/) from OSM's minutely replication feed
-2. Deleted objects (nodes, ways, relations) are extracted with their full geometry and tags
-3. Deletions are stored in daily line-delimited GeoJSON files
-4. [Tippecanoe](https://github.com/felt/tippecanoe) periodically converts the GeoJSON into PMTiles
-5. The merged PMTiles file and today's GeoJSON are uploaded to Cloudflare R2
-6. A static web map displays the data using MapLibre GL JS and the PMTiles protocol
+2. Changed objects (nodes, ways, relations) are extracted with their full geometry, current tags, and previous tags
+3. Changes are stored as daily GeoParquet files with MAP-typed tag columns and Hilbert-sorted geometries
+4. GeoParquet files are uploaded to Cloudflare R2
+5. A static web app queries the data in-browser using DuckDB-WASM and displays results on a MapLibre GL JS map
 
 ## Prerequisites
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- [tippecanoe](https://github.com/felt/tippecanoe) for tile generation
 - Cloudflare R2 bucket (optional — works locally without it)
 
 ## Setup
@@ -37,46 +35,41 @@ uv run python main.py
 
 The daemon will:
 - Poll for new augmented diffs every 5 seconds
-- Write deleted objects to `data/deletions/YYYY-MM-DD.geojsonl`
-- Upload today's GeoJSON to R2 every 60 seconds (if configured)
-- Rebuild PMTiles every 10 minutes (if tippecanoe is installed)
+- Write changed objects to daily GeoParquet files in `data/deletions/`
+- Upload today's Parquet file to R2 every 60 seconds (if configured)
 - Prune files older than 90 days
 
 All intervals are configurable via `.env`.
 
 ## Local development
 
-To test the web map locally without R2:
+To test the web app locally without R2:
 
 ```bash
-# Generate some data (fetches the last hour of deletions)
+# Generate some data (fetches the last hour of changes)
 uv run python -c "
 from daemon.watcher import Watcher
-from pipeline.build_tiles import TileBuilder
 from pathlib import Path
 
 w = Watcher(Path('./data'))
 seq = w.get_latest_sequence()
 for s in range(seq - 60, seq + 1):
     w.fetch_and_process(s)
-
-tb = TileBuilder(Path('./data/deletions'), Path('./data/tiles'))
-tb.build_daily_tiles()
-tb.merge_tiles()
 "
 
-# Start the dev server (serves map + tiles with CORS and byte range support)
+# Start the dev server (serves web app + data with CORS)
 uv run python serve.py
 ```
 
-Open http://localhost:8080/web/ and enter `http://localhost:8080/data/tiles/merged.pmtiles` in the config bar.
+Open http://localhost:8080/web/ and use the SQL query editor to explore the data. The web app uses DuckDB-WASM to query GeoParquet files directly in the browser.
 
 ## Web map features
 
-- Click any deleted object to see its tags, deletion timestamp, changeset, and user
+- **SQL query editor** with example queries for filtering by action, tags, area, and date
+- Click any object to see its tags, timestamp, changeset, and user
+- **Tag diff view** for modified objects — added tags highlighted green, removed tags in red with strikethrough, changed values shown as old → new in yellow
 - **History** link to view the object's history on openstreetmap.org
-- **Open in JOSM** to load the area in JOSM via remote control
-- **Download .osm** to get a minimal OSM XML file for re-adding the object
+- Query results persisted in localStorage across page reloads
 
 ## Configuration
 
@@ -89,9 +82,9 @@ See `.env.example` for all available settings:
 | `R2_ACCESS_KEY_ID` | | R2 access key |
 | `R2_SECRET_ACCESS_KEY` | | R2 secret key |
 | `R2_BUCKET_NAME` | `osm-undelete` | R2 bucket name |
-| `TILE_RETENTION_DAYS` | `90` | Days to keep old tile/GeoJSON files |
-| `TILE_BUILD_INTERVAL` | `600` | Seconds between tile rebuilds |
-| `TODAY_UPLOAD_INTERVAL` | `60` | Seconds between today.geojson uploads |
+| `TILE_RETENTION_DAYS` | `90` | Days to keep old data files |
+| `TILE_BUILD_INTERVAL` | `600` | Seconds between Parquet rebuilds |
+| `TODAY_UPLOAD_INTERVAL` | `60` | Seconds between uploads of today's data |
 
 ## Running tests
 
@@ -107,11 +100,11 @@ uv run pytest
 │   ├── geojson_writer.py    # Write features to daily GeoJSON files
 │   └── watcher.py           # Poll adiffs, track sequence state
 ├── pipeline/
-│   ├── build_tiles.py       # tippecanoe + tile-join
+│   ├── build_parquet.py     # Convert GeoJSON to GeoParquet with MAP tags
 │   ├── merge_upload.py      # Upload to R2 via boto3
 │   └── prune.py             # Delete old files past retention
 ├── web/
-│   └── index.html           # Static map (MapLibre + PMTiles)
+│   └── index.html           # Web app (DuckDB-WASM + MapLibre GL JS)
 ├── main.py                  # Daemon entry point
 └── serve.py                 # Local dev server
 ```
