@@ -26,7 +26,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("osm-changes")
 logger.setLevel(logging.DEBUG)
 
 POLL_INTERVAL = 60
