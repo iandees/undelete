@@ -387,7 +387,7 @@ function buildExamples(latestDate) {
     {
       label: "Deleted buildings (all time)",
       desc: "Buildings deleted across all available dates",
-      sql: `SELECT *\nFROM read_parquet('${allUrl}', spatial=true, hive_partitioning=true)\nWHERE action = 'delete'\n  AND tags->>'building' IS NOT NULL\nLIMIT 200;`,
+      sql: `SELECT *\nFROM read_parquet('${allUrl}', hive_partitioning=true)\nWHERE action = 'delete'\n  AND tags->>'building' IS NOT NULL\nLIMIT 200;`,
     },
   ];
 
