@@ -339,15 +339,21 @@ async function loadMetadata() {
     const latest = dates.length ? dates[dates.length - 1] : null;
     setStatus(`DuckDB ready | ${dates.length} dates available${latest ? " (latest: " + latest + ")" : ""}`);
     buildExamples(latest);
-    if (latest) {
+    const saved = localStorage.getItem("osm-changes-query");
+    if (saved) {
+      document.getElementById("query-editor").value = saved;
+    } else if (latest) {
       document.getElementById("query-editor").value = buildDefaultQuery(latest);
     }
   } catch {
     // No metadata — use manual URL
     baseParquetUrl = window.location.origin + "/data/parquet";
     buildExamples(null);
-    document.getElementById("query-editor").value =
-      "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
+    const saved = localStorage.getItem("osm-changes-query");
+    if (!saved) {
+      document.getElementById("query-editor").value =
+        "-- metadata.json not found; specify Parquet URL manually\nSELECT * FROM read_parquet('" + baseParquetUrl + "/date=2025-01-01/data.parquet') LIMIT 100";
+    }
     setStatus("DuckDB ready | No metadata found, use manual URLs");
   }
 }
@@ -485,6 +491,7 @@ window.runQuery = async function () {
   if (!conn) { setStatus("DuckDB not ready", true); return; }
   const sql = document.getElementById("query-editor").value.trim();
   if (!sql) return;
+  localStorage.setItem("osm-changes-query", sql);
 
   const overlay = document.getElementById("loading-overlay");
   overlay.classList.add("visible");
