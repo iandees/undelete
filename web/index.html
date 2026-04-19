@@ -392,14 +392,14 @@ async function createViews(dates, csDates) {
     if (dates.length > 0) {
       const urls = dates.map(d => parquetUrl(d));
       const urlList = urls.map(u => `'${u}'`).join(", ");
-      await conn.query(`CREATE OR REPLACE VIEW changesets AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
-      console.log("Created 'changesets' view with", dates.length, "dates");
+      await conn.query(`CREATE OR REPLACE VIEW osm_data AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
+      console.log("Created 'osm_data' view with", dates.length, "dates");
     }
     if (csDates.length > 0) {
       const urls = csDates.map(d => changesetParquetUrl(d));
       const urlList = urls.map(u => `'${u}'`).join(", ");
-      await conn.query(`CREATE OR REPLACE VIEW changeset_info AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
-      console.log("Created 'changeset_info' view with", csDates.length, "dates");
+      await conn.query(`CREATE OR REPLACE VIEW changesets AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
+      console.log("Created 'changesets' view with", csDates.length, "dates");
     }
   } catch (e) {
     console.warn("Failed to create views:", e);
@@ -415,7 +415,7 @@ function changesetParquetUrl(datePattern) {
 }
 
 function buildDefaultQuery(date) {
-  return `SELECT * FROM changesets\nWHERE date = '${date}'\nLIMIT 100`;
+  return `SELECT * FROM osm_data\nWHERE date = '${date}'\nLIMIT 100`;
 }
 
 // =========================================================
@@ -426,44 +426,44 @@ function buildExamples(latestDate) {
 
   window._examples = [
     {
-      label: "Today's changesets (sample)",
+      label: "OSM data (sample)",
       desc: "First 100 rows from the latest date",
-      sql: `SELECT * FROM changesets\nWHERE date = '${d}'\nLIMIT 100`,
+      sql: `SELECT * FROM osm_data\nWHERE date = '${d}'\nLIMIT 100`,
     },
     {
       label: "Today's deletes",
       desc: "All delete actions from the latest date",
-      sql: `SELECT * FROM changesets\nWHERE date = '${d}'\n  AND action = 'delete'`,
+      sql: `SELECT * FROM osm_data\nWHERE date = '${d}'\n  AND action = 'delete'`,
     },
     {
       label: "Changes by user",
       desc: "Count of changes grouped by user and action",
-      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM changesets\nWHERE date = '${d}'\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50`,
+      sql: `SELECT "user", action, COUNT(*) AS cnt\nFROM osm_data\nWHERE date = '${d}'\nGROUP BY "user", action\nORDER BY cnt DESC\nLIMIT 50`,
     },
     {
       label: "Deleted buildings (all dates)",
       desc: "Buildings deleted across all available dates",
-      sql: `SELECT * FROM changesets\nWHERE action = 'delete'\n  AND map_contains(tags, 'building')\nLIMIT 200`,
+      sql: `SELECT * FROM osm_data\nWHERE action = 'delete'\n  AND map_contains(tags, 'building')\nLIMIT 200`,
     },
     {
       label: "Tag search (example: amenity=cafe)",
       desc: "Find changes to features with a specific tag value",
-      sql: `-- tags is a MAP column\n-- map_contains(tags, 'key') checks if a key exists\n-- element_at(tags, 'key')[1] gets the value\nSELECT osm_type, osm_id, action, "user", timestamp, date,\n  element_at(tags, 'amenity')[1] AS amenity,\n  element_at(tags, 'name')[1] AS name,\n  geometry\nFROM changesets\nWHERE element_at(tags, 'amenity')[1] = 'cafe'\nLIMIT 200`,
+      sql: `-- tags is a MAP column\n-- map_contains(tags, 'key') checks if a key exists\n-- element_at(tags, 'key')[1] gets the value\nSELECT osm_type, osm_id, action, "user", timestamp, date,\n  element_at(tags, 'amenity')[1] AS amenity,\n  element_at(tags, 'name')[1] AS name,\n  geometry\nFROM osm_data\nWHERE element_at(tags, 'amenity')[1] = 'cafe'\nLIMIT 200`,
     },
     {
-      label: "Changeset info (sample)",
-      desc: "Recent changeset metadata with tags and bbox",
-      sql: `SELECT id, "user", created_at, closed_at, num_changes, comments_count,\n  element_at(tags, 'comment')[1] AS comment,\n  element_at(tags, 'created_by')[1] AS created_by,\n  geometry\nFROM changeset_info\nWHERE date = '${d}'\nORDER BY num_changes DESC\nLIMIT 100`,
+      label: "Changesets (sample)",
+      desc: "Recent changesets with their tags and bbox",
+      sql: `SELECT id, "user", created_at, closed_at, num_changes, comments_count,\n  element_at(tags, 'comment')[1] AS comment,\n  element_at(tags, 'created_by')[1] AS created_by,\n  geometry\nFROM changesets\nWHERE date = '${d}'\nORDER BY num_changes DESC\nLIMIT 100`,
     },
     {
-      label: "Changeset info by editor",
+      label: "Changesets by editor",
       desc: "Count changesets grouped by editor (created_by tag)",
-      sql: `SELECT element_at(tags, 'created_by')[1] AS editor,\n  COUNT(*) AS cnt,\n  SUM(num_changes) AS total_changes\nFROM changeset_info\nWHERE date = '${d}'\nGROUP BY editor\nORDER BY cnt DESC\nLIMIT 50`,
+      sql: `SELECT element_at(tags, 'created_by')[1] AS editor,\n  COUNT(*) AS cnt,\n  SUM(num_changes) AS total_changes\nFROM changesets\nWHERE date = '${d}'\nGROUP BY editor\nORDER BY cnt DESC\nLIMIT 50`,
     },
     {
       label: "Large changesets",
       desc: "Changesets with the most element changes",
-      sql: `SELECT id, "user", created_at, num_changes,\n  element_at(tags, 'comment')[1] AS comment,\n  geometry\nFROM changeset_info\nWHERE num_changes > 100\nORDER BY num_changes DESC\nLIMIT 100`,
+      sql: `SELECT id, "user", created_at, num_changes,\n  element_at(tags, 'comment')[1] AS comment,\n  geometry\nFROM changesets\nWHERE num_changes > 100\nORDER BY num_changes DESC\nLIMIT 100`,
     },
   ];
 
