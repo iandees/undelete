@@ -57,6 +57,7 @@ GRAMMAR = r"""
             | "nwr" -> nwr
 
     filter: tag_filter
+          | geo_filter
 
     tag_filter: "[" ESCAPED_STRING "]" -> tag_exists
              | "[" ESCAPED_STRING "=" ESCAPED_STRING "]" -> tag_eq
@@ -64,6 +65,11 @@ GRAMMAR = r"""
              | "[" ESCAPED_STRING "~" ESCAPED_STRING "]" -> tag_regex
              | "[" ESCAPED_STRING "!~" ESCAPED_STRING "]" -> tag_nregex
              | "[" ESCAPED_STRING "~" ESCAPED_STRING "," "i" "]" -> tag_regex_i
+
+    geo_filter: "(" SIGNED_NUMBER "," SIGNED_NUMBER "," SIGNED_NUMBER "," SIGNED_NUMBER ")" -> bbox
+              | "(around:" SIGNED_NUMBER "," SIGNED_NUMBER "," SIGNED_NUMBER ")" -> around
+
+    SIGNED_NUMBER: /[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?/
 
     output: "out" OUTPUT_MODE ";"
     OUTPUT_MODE: "body" | "geom" | "center" | "count" | "tags"
@@ -92,6 +98,8 @@ class OverpassTransformer(Transformer):
         for item in items[1:]:
             if isinstance(item, TagFilter):
                 stmt.tag_filters.append(item)
+            elif isinstance(item, (BboxFilter, AroundFilter)):
+                stmt.geo_filter = item
         return stmt
 
     def node(self, _):
@@ -108,6 +116,17 @@ class OverpassTransformer(Transformer):
 
     def filter(self, items):
         return items[0]
+
+    def geo_filter(self, items):
+        return items[0]
+
+    def bbox(self, items):
+        south, west, north, east = [float(x) for x in items]
+        return BboxFilter(south=south, west=west, north=north, east=east)
+
+    def around(self, items):
+        radius, lat, lon = [float(x) for x in items]
+        return AroundFilter(radius=radius, lat=lat, lon=lon)
 
     def tag_filter(self, items):
         return items[0]

@@ -90,3 +90,24 @@ def test_multiple_tag_filters():
     # Both conditions should be ANDed
     where_part = normed.split("WHERE")[2]  # second WHERE (after CTE)
     assert " AND " in where_part
+
+
+# --- Geographic filters ---
+
+def test_bbox_filter():
+    sql = overpass_to_sql('node(51.5,-0.1,51.6,0.1);')
+    normed = _normalize(sql)
+    assert "ST_Within(geometry, ST_MakeEnvelope(-0.1, 51.5, 0.1, 51.6))" in normed
+
+
+def test_around_filter():
+    sql = overpass_to_sql('node(around:1000,51.5,-0.1);')
+    normed = _normalize(sql)
+    assert "ST_DWithin(geometry, ST_Point(-0.1, 51.5)" in normed
+
+
+def test_tag_and_bbox():
+    sql = overpass_to_sql('node["amenity"="cafe"](51.5,-0.1,51.6,0.1);')
+    normed = _normalize(sql)
+    assert "element_at(tags, 'amenity')[1] = 'cafe'" in normed
+    assert "ST_Within(geometry, ST_MakeEnvelope(-0.1, 51.5, 0.1, 51.6))" in normed
