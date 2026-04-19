@@ -20,6 +20,20 @@ SAMPLE_ADIFF = b"""<?xml version="1.0" encoding="UTF-8"?>
             lat="2.0" lon="1.0" visible="false"/>
     </new>
   </action>
+  <action type="modify">
+    <old>
+      <node id="67890" version="1" lon="3.0" lat="4.0">
+        <tag k="name" v="Old Name"/>
+      </node>
+    </old>
+    <new>
+      <node id="67890" version="2" timestamp="2025-01-14T15:00:00Z"
+            uid="200" user="editor" changeset="1000"
+            lon="3.1" lat="4.1">
+        <tag k="name" v="New Name"/>
+      </node>
+    </new>
+  </action>
 </osm>"""
 
 
@@ -52,15 +66,26 @@ def test_fetch_and_process(tmp_path):
     with patch("daemon.watcher.requests.get", return_value=mock_response):
         watcher = Watcher(data_dir=tmp_path)
         count = watcher.fetch_and_process(6429815)
-        assert count == 1
+        assert count == 2
 
     # Check that a daily file was written
     geojsonl_files = list((tmp_path / "deletions").glob("*.geojsonl"))
     assert len(geojsonl_files) == 1
-    line = geojsonl_files[0].read_text().strip()
-    feature = json.loads(line)
-    assert feature["properties"]["osm_id"] == 12345
-    assert feature["properties"]["tags"]["name"] == "Deleted Node"
+    lines = geojsonl_files[0].read_text().strip().split("\n")
+    assert len(lines) == 2
+
+    features = [json.loads(line) for line in lines]
+    actions = {f["properties"]["action"] for f in features}
+    assert "delete" in actions
+    assert "modify" in actions
+
+    delete_feat = [f for f in features if f["properties"]["action"] == "delete"][0]
+    assert delete_feat["properties"]["osm_id"] == 12345
+    assert delete_feat["properties"]["tags"]["name"] == "Deleted Node"
+
+    modify_feat = [f for f in features if f["properties"]["action"] == "modify"][0]
+    assert modify_feat["properties"]["osm_id"] == 67890
+    assert modify_feat["properties"]["tags"]["name"] == "New Name"
 
 
 def test_fetch_404_returns_none(tmp_path):

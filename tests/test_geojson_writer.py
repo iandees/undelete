@@ -9,14 +9,17 @@ def _make_feature(osm_id=1, osm_type="node", lon=0.0, lat=0.0):
         "type": "Feature",
         "geometry": {"type": "Point", "coordinates": [lon, lat]},
         "properties": {
+            "action": "delete",
             "osm_type": osm_type,
             "osm_id": osm_id,
             "version": 1,
+            "changeset": 1,
+            "user": "user",
+            "uid": 1,
+            "timestamp": "2025-01-14T14:51:43Z",
             "tags": {},
-            "deleted_by": "user",
-            "deleted_uid": 1,
-            "deleted_changeset": 1,
-            "deleted_at": "2025-01-14T14:51:43Z",
+            "old_tags": {},
+            "old_geometry": {"type": "Point", "coordinates": [lon, lat]},
         },
     }
 

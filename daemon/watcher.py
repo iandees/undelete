@@ -44,9 +44,9 @@ class Watcher:
         state_file.write_text(str(seq))
 
     def fetch_and_process(self, seq: int) -> int | None:
-        """Fetch one adiff by sequence number, extract deletions.
+        """Fetch one adiff by sequence number, extract all changes.
 
-        Returns the number of deletions found, or None if the adiff
+        Returns the number of changes found, or None if the adiff
         is not yet available (404).
         """
         url = ADIFF_URL.format(seq=seq)
