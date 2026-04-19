@@ -531,7 +531,7 @@ document.getElementById("query-editor").addEventListener("keydown", (e) => {
 // WKB to GeoJSON Parser
 // =========================================================
 function readWKB(buf) {
-  // buf is a Uint8Array
+  // buf is a Uint8Array — handles standard WKB and EWKB (with SRID, Z, M flags)
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let offset = 0;
 
@@ -539,82 +539,75 @@ function readWKB(buf) {
   function readUint32(le) { const v = view.getUint32(offset, le); offset += 4; return v; }
   function readFloat64(le) { const v = view.getFloat64(offset, le); offset += 8; return v; }
 
+  function readCoord(le, dims) {
+    const x = readFloat64(le);
+    const y = readFloat64(le);
+    // Skip extra dimensions (Z, M) but only return [x, y]
+    for (let i = 2; i < dims; i++) readFloat64(le);
+    return [x, y];
+  }
+
   function readGeometry() {
-    const byteOrder = readByte(); // 0=BE, 1=LE
+    const byteOrder = readByte();
     const le = byteOrder === 1;
     const typeInt = readUint32(le);
-    // Mask out SRID and Z/M flags for the base type
-    const baseType = typeInt & 0xff;
+
+    // EWKB: skip SRID if flag 0x20000000 is set
+    const hasSRID = !!(typeInt & 0x20000000);
+    if (hasSRID) readUint32(le);
+
+    // Determine coordinate dimensions
+    const hasZ = !!(typeInt & 0x80000000);
+    const hasM = !!(typeInt & 0x40000000);
+    let dims = 2 + (hasZ ? 1 : 0) + (hasM ? 1 : 0);
+
+    // ISO WKB: types 1001-1004 = Z, 2001-2004 = M, 3001-3004 = ZM
+    const rawType = typeInt & 0xFFFF;
+    let baseType;
+    if (rawType > 3000) { baseType = rawType - 3000; dims = 4; }
+    else if (rawType > 2000) { baseType = rawType - 2000; dims = 3; }
+    else if (rawType > 1000) { baseType = rawType - 1000; dims = 3; }
+    else { baseType = rawType; }
 
     switch (baseType) {
-      case 1: return readPoint(le);
-      case 2: return readLineString(le);
-      case 3: return readPolygon(le);
-      case 4: return readMultiPoint(le);
-      case 5: return readMultiLineString(le);
-      case 6: return readMultiPolygon(le);
+      case 1: return { type: "Point", coordinates: readCoord(le, dims) };
+      case 2: return readLineString(le, dims);
+      case 3: return readPolygon(le, dims);
+      case 4: return readMulti(le, "MultiPoint", (g) => g.coordinates);
+      case 5: return readMulti(le, "MultiLineString", (g) => g.coordinates);
+      case 6: return readMulti(le, "MultiPolygon", (g) => g.coordinates);
       case 7: return readGeometryCollection(le);
       default: return null;
     }
   }
 
-  function readCoord(le) {
-    const x = readFloat64(le);
-    const y = readFloat64(le);
-    return [x, y];
-  }
-
-  function readPoint(le) {
-    return { type: "Point", coordinates: readCoord(le) };
-  }
-
-  function readLineString(le) {
+  function readLineString(le, dims) {
     const n = readUint32(le);
     const coords = [];
-    for (let i = 0; i < n; i++) coords.push(readCoord(le));
+    for (let i = 0; i < n; i++) coords.push(readCoord(le, dims));
     return { type: "LineString", coordinates: coords };
   }
 
-  function readPolygon(le) {
+  function readPolygon(le, dims) {
     const nRings = readUint32(le);
     const rings = [];
     for (let i = 0; i < nRings; i++) {
       const n = readUint32(le);
       const ring = [];
-      for (let j = 0; j < n; j++) ring.push(readCoord(le));
+      for (let j = 0; j < n; j++) ring.push(readCoord(le, dims));
       rings.push(ring);
     }
     return { type: "Polygon", coordinates: rings };
   }
 
-  function readMultiPoint(le) {
+  function readMulti(le, type, extract) {
     const n = readUint32(le);
-    const pts = [];
+    const items = [];
     for (let i = 0; i < n; i++) {
       const g = readGeometry();
-      if (g) pts.push(g.coordinates);
+      if (g) items.push(extract(g));
     }
-    return { type: "MultiPoint", coordinates: pts };
-  }
-
-  function readMultiLineString(le) {
-    const n = readUint32(le);
-    const lines = [];
-    for (let i = 0; i < n; i++) {
-      const g = readGeometry();
-      if (g) lines.push(g.coordinates);
-    }
-    return { type: "MultiLineString", coordinates: lines };
-  }
-
-  function readMultiPolygon(le) {
-    const n = readUint32(le);
-    const polys = [];
-    for (let i = 0; i < n; i++) {
-      const g = readGeometry();
-      if (g) polys.push(g.coordinates);
-    }
-    return { type: "MultiPolygon", coordinates: polys };
+    return { type, coordinates: items };
   }
 
   function readGeometryCollection(le) {
