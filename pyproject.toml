@@ -10,6 +10,7 @@ dependencies = [
     "pyarrow",
     "shapely",
     "pyyaml>=6.0.3",
+    "lark",
 ]
 
 [dependency-groups]
