@@ -506,7 +506,8 @@ window.runQuery = async function () {
       // Use DuckDB's ST_AsGeoJSON to convert geometry to GeoJSON strings
       // by wrapping the user query in a CTE
       try {
-        const geojsonSql = `WITH user_query AS (${sql})
+        const cleanSql = sql.replace(/;\s*$/, '');
+        const geojsonSql = `WITH user_query AS (${cleanSql})
           SELECT ST_AsGeoJSON(geometry) as __geojson FROM user_query`;
         const geojsonResult = await conn.query(geojsonSql);
         const geojsonRows = geojsonResult.toArray();
