@@ -392,7 +392,12 @@ function buildExamples(latestDate) {
     {
       label: "Deleted buildings (all dates)",
       desc: "Buildings deleted across all available dates",
-      sql: `SELECT *\nFROM read_parquet([\n    ${allUrlList}\n])\nWHERE action = 'delete'\n  AND tags LIKE '%building%'\nLIMIT 200`,
+      sql: `SELECT *\nFROM read_parquet([\n    ${allUrlList}\n])\nWHERE action = 'delete'\n  AND tags->>'building' IS NOT NULL\nLIMIT 200`,
+    },
+    {
+      label: "Tag search (example: amenity=cafe)",
+      desc: "Find changes to features with a specific tag value",
+      sql: `-- tags is a JSON string; use ->> to extract values\n-- Change the tag key/value below to search for anything\nSELECT osm_type, osm_id, action, "user", timestamp,\n  tags->>'amenity' AS amenity,\n  tags->>'name' AS name,\n  geometry\nFROM read_parquet('${dayUrl}')\nWHERE tags->>'amenity' = 'cafe'\nLIMIT 200`,
     },
   ];
 
