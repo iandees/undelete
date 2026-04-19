@@ -21,7 +21,7 @@ def parse_adiff(source):
     return handler.features
 
 
-def _build_geometry(osm_type, attrs, nds, bounds):
+def _build_geometry(osm_type, attrs, nds, bounds, members=None, tags=None):
     """Build a GeoJSON geometry from element data."""
     if osm_type == "node":
         lon = attrs.get("lon")
@@ -39,6 +39,32 @@ def _build_geometry(osm_type, attrs, nds, bounds):
         return {"type": "LineString", "coordinates": coords}
 
     elif osm_type == "relation":
+        # Try multipolygon assembly for multipolygon/boundary types
+        rel_type = (tags or {}).get("type", "")
+        if rel_type in ("multipolygon", "boundary") and members:
+            outers = []
+            inners = []
+            for m in members:
+                role = m.get("role", "outer") or "outer"
+                nds_list = m.get("nds", [])
+                if len(nds_list) < 4:
+                    continue
+                coords = [[float(nd["lon"]), float(nd["lat"])] for nd in nds_list]
+                if role == "inner":
+                    inners.append(coords)
+                else:
+                    outers.append(coords)
+            if outers:
+                # Simple approach: assign all inners to first outer
+                polygons = []
+                for i, outer in enumerate(outers):
+                    if i == 0:
+                        polygons.append([outer] + inners)
+                    else:
+                        polygons.append([outer])
+                return {"type": "MultiPolygon", "coordinates": polygons}
+
+        # Fall back to bounds center
         if bounds:
             min_lon = float(bounds["minlon"])
             max_lon = float(bounds["maxlon"])
@@ -67,12 +93,16 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
         self._old_tags = {}
         self._old_nds = []
         self._old_bounds = None
+        self._old_members = []
         # New element state
         self._new_osm_type = None
         self._new_attrs = {}
         self._new_tags = {}
         self._new_nds = []
         self._new_bounds = None
+        self._new_members = []
+        # Current member being parsed (for nested <nd> elements)
+        self._current_member = None
 
     def _reset_action(self):
         self._action_type = None
@@ -83,11 +113,14 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
         self._old_tags = {}
         self._old_nds = []
         self._old_bounds = None
+        self._old_members = []
         self._new_osm_type = None
         self._new_attrs = {}
         self._new_tags = {}
         self._new_nds = []
         self._new_bounds = None
+        self._new_members = []
+        self._current_member = None
 
     def startElement(self, name, attrs):
         if name == "action":
@@ -115,9 +148,23 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
         elif name == "tag":
             target = self._old_tags if side == "old" else self._new_tags
             target[attrs.get("k")] = attrs.get("v")
+        elif name == "member":
+            self._current_member = {
+                "type": attrs.get("type"),
+                "ref": attrs.get("ref"),
+                "role": attrs.get("role", ""),
+                "nds": [],
+            }
+            target = self._old_members if side == "old" else self._new_members
+            target.append(self._current_member)
         elif name == "nd":
-            target = self._old_nds if side == "old" else self._new_nds
-            target.append(dict(attrs))
+            if self._current_member is not None:
+                # nd inside a member element
+                self._current_member["nds"].append(dict(attrs))
+            else:
+                # nd directly inside a way
+                target = self._old_nds if side == "old" else self._new_nds
+                target.append(dict(attrs))
         elif name == "bounds":
             if side == "old":
                 self._old_bounds = dict(attrs)
@@ -125,7 +172,9 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
                 self._new_bounds = dict(attrs)
 
     def endElement(self, name):
-        if name == "old":
+        if name == "member":
+            self._current_member = None
+        elif name == "old":
             self._in_old = False
         elif name == "new":
             self._in_new = False
@@ -142,7 +191,10 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
             osm_type = self._new_osm_type
             if not osm_type:
                 return
-            geometry = _build_geometry(osm_type, self._new_attrs, self._new_nds, self._new_bounds)
+            geometry = _build_geometry(
+                osm_type, self._new_attrs, self._new_nds, self._new_bounds,
+                members=self._new_members, tags=self._new_tags,
+            )
             if geometry is None:
                 return
             attrs = self._new_attrs
@@ -158,6 +210,7 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
             geometry = _build_geometry(
                 self._new_osm_type or self._old_osm_type,
                 self._new_attrs, self._new_nds, self._new_bounds,
+                members=self._new_members, tags=self._new_tags,
             )
             if geometry is None:
                 return
@@ -167,6 +220,7 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
             old_geometry = _build_geometry(
                 self._old_osm_type or self._new_osm_type,
                 self._old_attrs, self._old_nds, self._old_bounds,
+                members=self._old_members, tags=self._old_tags,
             )
 
         elif action == "delete":
@@ -174,7 +228,10 @@ class _AdiffHandler(xml.sax.handler.ContentHandler):
             osm_type = self._old_osm_type
             if not osm_type:
                 return
-            geometry = _build_geometry(osm_type, self._old_attrs, self._old_nds, self._old_bounds)
+            geometry = _build_geometry(
+                osm_type, self._old_attrs, self._old_nds, self._old_bounds,
+                members=self._old_members, tags=self._old_tags,
+            )
             if geometry is None:
                 return
             # Use old attrs for version (last visible), new attrs for who/when

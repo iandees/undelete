@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <!-- Modify multipolygon relation: old has outer+inner, new has only outer -->
+  <action type="modify">
+    <old>
+      <relation id="600" version="2" user="olduser" uid="6001"
+                timestamp="2024-06-01T08:00:00Z" changeset="10001">
+        <bounds minlat="50.0" minlon="3.0" maxlat="50.1" maxlon="3.1"/>
+        <member type="way" ref="601" role="outer">
+          <nd ref="6001" lon="3.0" lat="50.0"/>
+          <nd ref="6002" lon="3.1" lat="50.0"/>
+          <nd ref="6003" lon="3.1" lat="50.1"/>
+          <nd ref="6004" lon="3.0" lat="50.1"/>
+          <nd ref="6001" lon="3.0" lat="50.0"/>
+        </member>
+        <member type="way" ref="602" role="inner">
+          <nd ref="6011" lon="3.02" lat="50.02"/>
+          <nd ref="6012" lon="3.08" lat="50.02"/>
+          <nd ref="6013" lon="3.08" lat="50.08"/>
+          <nd ref="6014" lon="3.02" lat="50.08"/>
+          <nd ref="6011" lon="3.02" lat="50.02"/>
+        </member>
+        <tag k="type" v="multipolygon"/>
+        <tag k="building" v="yes"/>
+      </relation>
+    </old>
+    <new>
+      <relation id="600" version="3" timestamp="2025-02-01T09:00:00Z"
+                uid="6002" user="editor1" changeset="10002">
+        <bounds minlat="50.0" minlon="3.0" maxlat="50.1" maxlon="3.1"/>
+        <member type="way" ref="601" role="outer">
+          <nd ref="6001" lon="3.0" lat="50.0"/>
+          <nd ref="6002" lon="3.1" lat="50.0"/>
+          <nd ref="6003" lon="3.1" lat="50.1"/>
+          <nd ref="6004" lon="3.0" lat="50.1"/>
+          <nd ref="6001" lon="3.0" lat="50.0"/>
+        </member>
+        <tag k="type" v="multipolygon"/>
+        <tag k="building" v="yes"/>
+      </relation>
+    </new>
+  </action>
+
+  <!-- Delete boundary relation -->
+  <action type="delete">
+    <old>
+      <relation id="700" version="4" user="boundaryuser" uid="7001"
+                timestamp="2024-05-01T07:00:00Z" changeset="11001">
+        <bounds minlat="48.0" minlon="2.0" maxlat="48.5" maxlon="2.5"/>
+        <member type="way" ref="701" role="outer">
+          <nd ref="7001" lon="2.0" lat="48.0"/>
+          <nd ref="7002" lon="2.5" lat="48.0"/>
+          <nd ref="7003" lon="2.5" lat="48.5"/>
+          <nd ref="7004" lon="2.0" lat="48.5"/>
+          <nd ref="7001" lon="2.0" lat="48.0"/>
+        </member>
+        <tag k="type" v="boundary"/>
+        <tag k="boundary" v="administrative"/>
+      </relation>
+    </old>
+    <new>
+      <relation id="700" version="5" timestamp="2025-03-01T10:00:00Z"
+                uid="7002" user="deleter2" changeset="11002"/>
+    </new>
+  </action>
+
+  <!-- Create route relation (not multipolygon, should use bounds center) -->
+  <action type="create">
+    <new>
+      <relation id="800" version="1" timestamp="2025-04-01T11:00:00Z"
+                uid="8001" user="routemaker" changeset="12001">
+        <bounds minlat="40.0" minlon="1.0" maxlat="42.0" maxlon="3.0"/>
+        <member type="way" ref="801" role="">
+          <nd ref="8001" lon="1.0" lat="40.0"/>
+          <nd ref="8002" lon="2.0" lat="41.0"/>
+          <nd ref="8003" lon="3.0" lat="42.0"/>
+        </member>
+        <tag k="type" v="route"/>
+        <tag k="route" v="bus"/>
+      </relation>
+    </new>
+  </action>
+</osm>

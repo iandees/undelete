@@ -134,6 +134,63 @@ def test_existing_delete_nodes_fixture():
     assert f0["properties"]["changeset"] == 161348203
 
 
+# --- Tests using sample_relation_multipolygon.xml ---
+
+def _relation_mp():
+    return _parse_fixture("sample_relation_multipolygon.xml")
+
+
+def test_parse_modify_multipolygon_relation():
+    feats = _features_by_id(_relation_mp())
+    f = feats[600]
+    p = f["properties"]
+    assert p["action"] == "modify"
+    assert p["osm_type"] == "relation"
+    assert p["version"] == 3
+    assert p["tags"] == {"type": "multipolygon", "building": "yes"}
+
+    # New geometry: outer only, no inner
+    geom = f["geometry"]
+    assert geom["type"] == "MultiPolygon"
+    assert len(geom["coordinates"]) == 1  # one polygon
+    assert len(geom["coordinates"][0]) == 1  # outer ring only, no holes
+
+    # Old geometry: outer + inner
+    old_geom = p["old_geometry"]
+    assert old_geom["type"] == "MultiPolygon"
+    assert len(old_geom["coordinates"]) == 1  # one polygon
+    assert len(old_geom["coordinates"][0]) == 2  # outer ring + 1 hole
+
+
+def test_parse_delete_boundary_relation():
+    feats = _features_by_id(_relation_mp())
+    f = feats[700]
+    p = f["properties"]
+    assert p["action"] == "delete"
+    assert p["osm_type"] == "relation"
+    assert p["tags"] == {"type": "boundary", "boundary": "administrative"}
+
+    geom = f["geometry"]
+    assert geom["type"] == "MultiPolygon"
+    assert len(geom["coordinates"]) == 1
+    outer_ring = geom["coordinates"][0][0]
+    assert outer_ring[0] == [2.0, 48.0]
+
+
+def test_parse_non_multipolygon_relation_uses_bounds_center():
+    feats = _features_by_id(_relation_mp())
+    f = feats[800]
+    p = f["properties"]
+    assert p["action"] == "create"
+    assert p["osm_type"] == "relation"
+    assert p["tags"] == {"type": "route", "route": "bus"}
+
+    geom = f["geometry"]
+    assert geom["type"] == "Point"
+    # bounds center: (1.0+3.0)/2=2.0, (40.0+42.0)/2=41.0
+    assert geom["coordinates"] == [2.0, 41.0]
+
+
 def test_existing_delete_ways_fixture():
     """Backward compat: existing fixture still returns 2 deletes."""
     features = _parse_fixture("sample_delete_ways.xml")
