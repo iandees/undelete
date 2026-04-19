@@ -8,30 +8,10 @@ import shapely.wkb
 
 logger = logging.getLogger(__name__)
 
-# Row group size controls spatial filtering granularity.
-# Smaller = more row groups = better bbox skip rate, but more Parquet overhead.
-ROW_GROUP_SIZE = 10_000
-
-
-def _geohash_sort_key(geom):
-    """Return a geohash-like interleaved bit string for spatial sorting.
-
-    Sorts by interleaving lat/lon bits so nearby geometries cluster together.
-    This ensures each row group covers a small spatial extent, making
-    bbox-based row group skipping effective.
-    """
-    c = geom.centroid
-    # Normalize to 0-1 range
-    x = (c.x + 180) / 360
-    y = (c.y + 90) / 180
-    # Interleave 16 bits of x and y for a 32-bit spatial key
-    key = 0
-    ix = int(x * 65536)
-    iy = int(y * 65536)
-    for i in range(16):
-        bit = 1 << (15 - i)
-        key = (key << 2) | ((1 if ix & bit else 0) << 1) | (1 if iy & bit else 0)
-    return key
+# Target row group size in rows. With Hilbert sorting, each row group covers
+# a compact spatial area. gpio recommends 10K-200K rows per group and 64-256MB
+# per group. At ~2KB/row, 50K rows ≈ 100MB per group — within the sweet spot.
+ROW_GROUP_SIZE = 50_000
 
 
 class ParquetBuilder:
@@ -88,20 +68,24 @@ class ParquetBuilder:
 
         gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
 
-        # Sort spatially so each row group covers a small geographic area
-        gdf["_spatial_key"] = gdf.geometry.apply(_geohash_sort_key)
-        gdf = gdf.sort_values("_spatial_key").drop(columns=["_spatial_key"]).reset_index(drop=True)
+        # Sort by Hilbert curve distance for optimal spatial clustering.
+        # This ensures each row group covers a compact geographic area,
+        # maximizing the effectiveness of bbox-based row group skipping.
+        gdf["_hilbert"] = gdf.geometry.hilbert_distance()
+        gdf = gdf.sort_values("_hilbert").drop(columns=["_hilbert"]).reset_index(drop=True)
 
         out_dir = self.parquet_dir / f"date={date_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
         gdf.to_parquet(
             out_dir / "data.parquet",
+            schema_version="1.1.0",
             write_covering_bbox=True,
+            compression="zstd",
             row_group_size=ROW_GROUP_SIZE,
         )
 
+        n_groups = (len(gdf) + ROW_GROUP_SIZE - 1) // ROW_GROUP_SIZE
         self._mtimes[date_str] = mtime
         logger.info("Built %s (%d features, %d row groups)",
-                     out_dir / "data.parquet", len(gdf),
-                     (len(gdf) + ROW_GROUP_SIZE - 1) // ROW_GROUP_SIZE)
+                     out_dir / "data.parquet", len(gdf), n_groups)
         return True
