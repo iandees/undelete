@@ -38,7 +38,7 @@ The daemon will:
 - Follow element changes in a background thread, using day/hour/minute diffs depending on how far behind it is
 - Follow changeset replication (catching up on its small static files with parallel downloads, committed strictly in order), and write both to daily files in `data/deletions/` and `data/changesets/`
 - Build GeoParquet every `PARQUET_BUILD_INTERVAL` seconds and upload it to R2 (if configured)
-- Delete a day's raw file only once that day is complete and its parquet was built and uploaded
+- Delete a day's raw file only once that day is complete and its parquet was built and uploaded (changesets are filed by the date they were created, and a date is complete two days after it starts)
 - Prune files older than `RETENTION_DAYS`
 
 It resumes from `data/state/osc_position.json` (or an older `last_seq.txt`). If it is more than `CATCHUP_MAX_DAYS` behind it skips ahead and logs a warning about the gap.
@@ -95,6 +95,7 @@ See `.env.example` for all available settings:
 | `PARQUET_BUILD_INTERVAL` | `300` | Seconds between Parquet rebuilds |
 | `CATCHUP_MAX_DAYS` | `7` | Never catch up further back than this; older gaps are skipped |
 | `CHANGESET_WORKERS` | `8` | Parallel changeset-file downloads while catching up (more than ~8 gets slower, not faster) |
+| `CHANGESET_FREEZE_DAYS` | `2` | Changesets are filed by creation date; a date stops accepting updates this long after it starts (later ones, mostly new comments on old changesets, are dropped) |
 | `OSM_API_MIN_INTERVAL` | `0.5` | Minimum seconds between OSM API requests |
 | `OSM_USER_AGENT` | `osm-undelete/0.1 (+https://github.com/iandees/undelete)` | User-Agent for OSM API requests; add your own contact |
 

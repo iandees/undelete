@@ -99,6 +99,7 @@ def main():
 
     last_parquet_build = 0.0
     published = {}  # date -> mtime of the raw file version whose parquet was built and uploaded
+    cs_published = {}  # same, for changesets
 
     logger.info("Starting watcher daemon (poll=%ds, parquet_build=%ds)",
                 POLL_INTERVAL, parquet_build_interval)
@@ -161,22 +162,20 @@ def main():
                 prune_old_files(data_dir / "deletions", retention_days)
 
                 # Changeset parquet
-                cs_built = cs_parquet_builder.build(today_str)
-                if cs_built:
-                    logger.info("Built changeset parquet for %s", today_str)
-                    if uploader:
-                        pf = data_dir / "changeset_parquet" / f"date={today_str}" / "data.parquet"
-                        uploader.upload_file(pf, f"osm-changesets/date={today_str}/data.parquet")
-
+                # Changeset files are named for the creation date, so several recent dates
+                # are live at once. Build them all; delete a raw file only once its date is
+                # frozen (the watcher no longer writes to it) and that exact version was
+                # built and uploaded.
+                cs_cutoff = cs_watcher.complete_before()
                 for jsonl in sorted((data_dir / "changesets").glob("*.jsonl")):
                     date_str = jsonl.stem
-                    if date_str == today_str:
-                        continue
                     if cs_parquet_builder.build(date_str):
                         logger.info("Built changeset parquet for %s", date_str)
                         if uploader:
                             pf = data_dir / "changeset_parquet" / f"date={date_str}" / "data.parquet"
                             uploader.upload_file(pf, f"osm-changesets/date={date_str}/data.parquet")
+                        cs_published[date_str] = jsonl.stat().st_mtime
+                    if date_str < cs_cutoff and cs_published.get(date_str) == jsonl.stat().st_mtime:
                         jsonl.unlink()
                         logger.info("Cleaned up %s", jsonl.name)
 
