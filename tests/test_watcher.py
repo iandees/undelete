@@ -119,6 +119,30 @@ def test_skips_ahead_when_further_behind_than_max_days(tmp_path):
     assert planner.epoch(position) >= planner.latest["minute"][1] - 2 * 86400 - 120
 
 
+def test_by_default_there_is_no_limit_so_every_change_is_captured(tmp_path, monkeypatch, caplog):
+    monkeypatch.delenv("CATCHUP_MAX_DAYS", raising=False)
+    from daemon.watcher import _max_days_from_env
+    assert _max_days_from_env() is None
+
+    watcher = make_watcher(tmp_path, n_minutes=60 * 24 * 20, max_days=_max_days_from_env())
+    watcher.save_position(Position(minute=FIRST + 10), epoch=FakeSource(1).ts(FIRST + 10))
+    caplog.set_level(logging.INFO, logger="daemon.watcher")
+
+    position = watcher.load_position(watcher.planner_factory())
+
+    assert position == Position(minute=FIRST + 10, label=None)     # resumes exactly where it stopped
+    assert "skipping ahead" not in caplog.text
+    assert "Catching up on 20.0 days" in caplog.text                 # and says how much there is
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("", None), ("0", None), ("none", None), ("Unlimited", None), ("7", 7.0), ("0.5", 0.5)])
+def test_catchup_limit_setting(monkeypatch, value, expected):
+    from daemon.watcher import _max_days_from_env
+    monkeypatch.setenv("CATCHUP_MAX_DAYS", value)
+    assert _max_days_from_env() == expected
+
+
 def test_complete_before_waits_an_hour_past_midnight(tmp_path):
     watcher = make_watcher(tmp_path)
     assert watcher.complete_before() == "0000-00-00"      # nothing processed yet
@@ -146,6 +170,7 @@ def test_catch_up_logs_each_coarse_step_and_one_line_for_a_run_of_minutes(tmp_pa
     watcher.catch_up()
 
     lines = info_lines(caplog)
+    assert lines.pop(0).startswith("Catching up on 1.")       # how much there is, said once up front
     assert len(lines) == len(coarse) + 1                      # not one line per minute diff
     assert [l.split()[0] for l in lines[:-1]] == [s.interval for s in coarse]
     assert lines[-1].startswith(f"minute diffs {minutes[0].seq}..{minutes[-1].seq} ({len(minutes)}) done: ")

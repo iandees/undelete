@@ -28,7 +28,14 @@ from daemon.replication_planner import HttpStateSource, Planner, Position, Step
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_DAYS = float(os.environ.get("CATCHUP_MAX_DAYS", "7"))
+def _max_days_from_env():
+    """CATCHUP_MAX_DAYS: how far back catch-up may start. Unset (or 0 / none) means no limit,
+    so every change since the last processed one is captured; a limit leaves a gap."""
+    value = os.environ.get("CATCHUP_MAX_DAYS", "").strip().lower()
+    return None if value in ("", "0", "none", "unlimited") else float(value)
+
+
+DEFAULT_MAX_DAYS = _max_days_from_env()
 # Features are timestamped when the edit was uploaded, which can trail a diff's label by
 # a minute or so; a date is only treated as complete this long after its last edit.
 COMPLETE_MARGIN = 3600
@@ -104,12 +111,15 @@ class Watcher:
         else:
             logger.info("No saved position, starting from latest minute %d", lm_seq)
             return Position(minute=lm_seq)
-        oldest = lm_ts - int(self.max_days * 86400)
-        if planner.epoch(position) < oldest:
-            skip_to = planner.last_minute_at_or_before(oldest)
-            logger.warning("Position is more than %s days behind; skipping ahead to minute %d "
-                           "(this leaves a gap in the data)", self.max_days, skip_to)
+        behind_days = (lm_ts - planner.epoch(position)) / 86400
+        if self.max_days is not None and behind_days > self.max_days:
+            skip_to = planner.last_minute_at_or_before(lm_ts - int(self.max_days * 86400))
+            logger.warning("Position is %.1f days behind, more than the %s day limit "
+                           "(CATCHUP_MAX_DAYS); skipping ahead to minute %d, which leaves a gap "
+                           "in the data", behind_days, self.max_days, skip_to)
             return Position(minute=skip_to)
+        if behind_days >= 1:
+            logger.info("Catching up on %.1f days of changes", behind_days)
         return position
 
     def save_position(self, position: Position, epoch: int):

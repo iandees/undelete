@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from pipeline.build_changeset_parquet import ChangesetParquetBuilder
 from pipeline.build_parquet import ParquetBuilder
 from pipeline.merge_upload import R2Uploader
 from pipeline.prune import prune_old_files
+from pipeline.publish import DailyPublisher
 
 load_dotenv()
 
@@ -98,8 +99,15 @@ def main():
         logger.info("Resuming changesets from saved sequence: %d", cs_last_seq)
 
     last_parquet_build = 0.0
-    published = {}  # date -> mtime of the raw file version whose parquet was built and uploaded
-    cs_published = {}  # same, for changesets
+    merge_interval = int(os.environ.get("LATE_MERGE_INTERVAL", "3600"))
+    work_dir = data_dir / "work"
+    element_publisher = DailyPublisher(
+        "elements", data_dir / "deletions", ".geojsonl", data_dir / "parquet", parquet_builder,
+        "osm-changes", uploader=uploader, work_dir=work_dir, merge_interval=merge_interval)
+    changeset_publisher = DailyPublisher(
+        "changesets", data_dir / "changesets", ".jsonl", data_dir / "changeset_parquet",
+        cs_parquet_builder, "osm-changesets", uploader=uploader, work_dir=work_dir,
+        merge_interval=merge_interval)
 
     logger.info("Starting watcher daemon (poll=%ds, parquet_build=%ds)",
                 POLL_INTERVAL, parquet_build_interval)
@@ -136,52 +144,28 @@ def main():
         if (now - last_parquet_build) >= parquet_build_interval:
             last_parquet_build = now
             try:
-                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                keep_from = (datetime.now(timezone.utc).date() - timedelta(days=retention_days)).isoformat()
 
-                # Element changes parquet. Build every daily file (partial days too, so
-                # today and a catch-up in progress stay fresh) under the watcher's lock so
-                # we never read a half-written batch. A raw file is only deleted once its
-                # date is complete -- the watcher has moved past it -- and the exact
-                # version we deleted was built and uploaded.
+                # Element changes. The publisher builds each live day's parquet from its raw
+                # file, publishes a settled day and deletes its raw file, and merges rows that
+                # arrive later for a published day into its parquet (see pipeline/publish.py).
+                # It runs under the watcher's lock so it never reads a half-written batch.
                 with watcher.lock:
-                    cutoff = watcher.complete_before()
-                    for geojsonl in sorted((data_dir / "deletions").glob("*.geojsonl")):
-                        date_str = geojsonl.stem
-                        if parquet_builder.build(date_str):
-                            logger.info("Built parquet for %s", date_str)
-                            if uploader:
-                                pf = data_dir / "parquet" / f"date={date_str}" / "data.parquet"
-                                uploader.upload_file(pf, f"osm-changes/date={date_str}/data.parquet")
-                            published[date_str] = geojsonl.stat().st_mtime
-                        if date_str < cutoff and published.get(date_str) == geojsonl.stat().st_mtime:
-                            geojsonl.unlink()
-                            logger.info("Cleaned up %s", geojsonl.name)
+                    element_publisher.run(watcher.complete_before(), keep_from)
 
-                write_and_upload_metadata(data_dir / "parquet", uploader, r2_public_url, "osm-changes")
+                # Prune before writing metadata so it never lists a date that is about to go
                 prune_old_files(data_dir / "parquet", retention_days)
-                prune_old_files(data_dir / "deletions", retention_days)
+                write_and_upload_metadata(data_dir / "parquet", uploader, r2_public_url, "osm-changes")
 
-                # Changeset parquet
-                # Changeset files are named for the creation date, so several recent dates
-                # are live at once. Build them all; delete a raw file only once its date is
-                # frozen (the watcher no longer writes to it) and that exact version was
-                # built and uploaded.
-                cs_cutoff = cs_watcher.complete_before()
-                for jsonl in sorted((data_dir / "changesets").glob("*.jsonl")):
-                    date_str = jsonl.stem
-                    if cs_parquet_builder.build(date_str):
-                        logger.info("Built changeset parquet for %s", date_str)
-                        if uploader:
-                            pf = data_dir / "changeset_parquet" / f"date={date_str}" / "data.parquet"
-                            uploader.upload_file(pf, f"osm-changesets/date={date_str}/data.parquet")
-                        cs_published[date_str] = jsonl.stat().st_mtime
-                    if date_str < cs_cutoff and cs_published.get(date_str) == jsonl.stat().st_mtime:
-                        jsonl.unlink()
-                        logger.info("Cleaned up %s", jsonl.name)
+                # Changesets are filed by the date they were created, so several recent
+                # dates are live at once.
+                changeset_publisher.run(cs_watcher.complete_before(), keep_from)
 
-                write_and_upload_metadata(data_dir / "changeset_parquet", uploader, r2_public_url, "osm-changesets")
                 prune_old_files(data_dir / "changeset_parquet", retention_days)
-                prune_old_files(data_dir / "changesets", retention_days)
+                write_and_upload_metadata(data_dir / "changeset_parquet", uploader, r2_public_url, "osm-changesets")
+                # Raw files are not pruned by age: each is deleted once it has been published
+                # (or dropped when older than the retention and there is no R2), and an
+                # unpublished one holds changes that exist nowhere else.
             except Exception:
                 logger.exception("Failed to build/upload parquet")
 

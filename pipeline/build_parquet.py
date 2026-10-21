@@ -1,8 +1,11 @@
 import json
 import logging
+import os
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import shapely
 from shapely.geometry import shape
@@ -94,6 +97,37 @@ def _shape(geojson):
     if geojson["type"] == "LineString" and len(geojson["coordinates"]) == 1:
         geojson = {"type": "Point", "coordinates": geojson["coordinates"][0]}
     return shape(geojson)
+
+
+_TYPES = ["node", "way", "relation"]
+_ACTIONS = ["create", "modify", "delete"]
+_ID_BITS, _VERSION_BITS = 40, 20
+
+
+def _pack_keys(osm_types, actions, versions, ids):
+    """Pack (osm_type, action, version, osm_id) into one exact uint64 per row.
+
+    Merging has to know which rows a parquet already holds. Packing the identity into 64 bits
+    (2 + 2 + 20 + 40) lets a day with millions of rows be checked with a numpy array of ~8 bytes
+    a row instead of Python tuples, and there are no hash collisions to worry about.
+    """
+    types = np.fromiter((_TYPES.index(t) for t in osm_types), dtype=np.uint64)
+    acts = np.fromiter((_ACTIONS.index(a) for a in actions), dtype=np.uint64)
+    versions = np.asarray(versions, dtype=np.uint64)
+    ids = np.asarray(ids, dtype=np.uint64)
+    if len(ids) and (ids.max() >> np.uint64(_ID_BITS) or versions.max() >> np.uint64(_VERSION_BITS)):
+        raise ValueError("osm_id or version too large to pack into a merge key")
+    return (types << np.uint64(62)) | (acts << np.uint64(60)) \
+        | (versions << np.uint64(_ID_BITS)) | ids
+
+
+def _table_keys(table):
+    """Packed keys for an arrow table that has the element identity columns."""
+    types = pc.index_in(table["osm_type"], value_set=pa.array(_TYPES)).to_numpy(zero_copy_only=False)
+    acts = pc.index_in(table["action"], value_set=pa.array(_ACTIONS)).to_numpy(zero_copy_only=False)
+    return ((types.astype(np.uint64) << np.uint64(62)) | (acts.astype(np.uint64) << np.uint64(60))
+            | (table["version"].to_numpy().astype(np.uint64) << np.uint64(_ID_BITS))
+            | table["osm_id"].to_numpy().astype(np.uint64))
 
 
 class ParquetBuilder:
@@ -244,3 +278,85 @@ class ParquetBuilder:
         self._mtimes[date_str] = mtime
         logger.info("Built %s (%d features, %d row groups)", out_path, total_features, n_groups)
         return True
+
+    def built_mtime(self, date_str: str):
+        """mtime of the raw file version the parquet currently reflects (None if never built)."""
+        return self._mtimes.get(date_str)
+
+    def merge(self, date_str: str, base_path: Path) -> int | None:
+        """Add the raw file's rows to an existing parquet, keeping everything already in it.
+
+        Used for a day whose raw file is not the complete history: rows that arrive after the
+        day was published. Building fresh from them would replace the published file with just
+        those rows. Rows already in `base_path` (same type, id, version and action) are
+        skipped, so merging is idempotent and also correct if the raw file is the whole day.
+
+        Returns the number of rows added, or None if there is no raw file. When rows were
+        added the merged result is written to this builder's output path (atomically);
+        when none were, nothing is written.
+        """
+        geojsonl_path = self.geojsonl_dir / f"{date_str}.geojsonl"
+        if not geojsonl_path.exists():
+            return None
+        mtime = geojsonl_path.stat().st_mtime
+
+        out_dir = self.parquet_dir / f"date={date_str}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "data.parquet"
+        tmp_path = out_dir / "data.parquet.tmp"
+
+        base = pq.ParquetFile(base_path)
+        known = np.empty(0, dtype=np.uint64)
+        types = set()
+        # The footer's key/value metadata, not the arrow schema: a merged file records its
+        # geometry types there when the writer closes
+        base_geo = (base.metadata.metadata or {}).get(b"geo")
+        if base_geo:
+            types.update(json.loads(base_geo)["columns"]["geometry"].get("geometry_types", []))
+        for i in range(base.num_row_groups):
+            known = np.concatenate([known, _table_keys(base.read_row_group(
+                i, columns=["osm_type", "action", "version", "osm_id"]))])
+        known = np.unique(known)
+
+        added = 0
+        writer = None
+        try:
+            with open(geojsonl_path) as f:
+                while True:
+                    rows, geoms = self._read_chunk(f, ROW_GROUP_SIZE)
+                    if not rows:
+                        break
+                    # rows are (action, osm_type, osm_id, version, ...)
+                    keys = _pack_keys([r[1] for r in rows], [r[0] for r in rows],
+                                      [r[3] for r in rows], [r[2] for r in rows])
+                    _, first = np.unique(keys, return_index=True)       # drop repeats within the chunk
+                    fresh = np.zeros(len(rows), dtype=bool)
+                    fresh[first] = True
+                    fresh &= ~np.isin(keys, known)                      # and rows already published
+                    if not fresh.any():
+                        continue
+                    keep = np.flatnonzero(fresh)
+                    table, geom_types = self._chunk_to_table([rows[i] for i in keep],
+                                                             [geoms[i] for i in keep])
+                    types.update(geom_types)
+                    known = np.union1d(known, keys[keep])
+                    if writer is None:
+                        writer = pq.ParquetWriter(tmp_path, PARQUET_SCHEMA, compression="zstd")
+                        for i in range(base.num_row_groups):            # keep what was published
+                            writer.write_table(base.read_row_group(i).cast(PARQUET_SCHEMA))
+                    writer.write_table(table)
+                    added += len(table)
+        except BaseException:
+            if writer is not None:
+                writer.close()
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+        self._mtimes[date_str] = mtime
+        if writer is None:
+            return 0                                                    # nothing new: leave it alone
+        writer.add_key_value_metadata({"geo": _build_geo_metadata(types)})
+        writer.close()
+        os.replace(tmp_path, out_path)
+        logger.info("Merged %d new features into %s", added, out_path)
+        return added

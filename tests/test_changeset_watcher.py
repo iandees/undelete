@@ -168,28 +168,31 @@ def test_every_version_of_a_changeset_lands_in_the_same_file(tmp_path, monkeypat
     assert [json.loads(l)["num_changes"] for l in (tmp_path / "changesets" / "2026-01-09.jsonl").open()] == [1, 2, 3]
 
 
-def test_updates_to_changesets_from_frozen_dates_are_dropped(tmp_path, monkeypatch):
+def test_updates_to_changesets_from_old_dates_are_kept_for_the_publisher_to_merge(tmp_path, monkeypatch):
     watcher = ChangesetWatcher(tmp_path)
     patch_fetch(monkeypatch, watcher, lambda seq: [
         cs(1, "2026-01-10T00:30:00Z"),                 # today
         cs(2, "2026-01-09T10:00:00Z"),                 # yesterday: an open changeset may still change
-        cs(3, "2026-01-08T10:00:00Z"),                 # >24h past its date's end: frozen at 12:00 on the 10th
+        cs(3, "2026-01-08T10:00:00Z"),                 # settled by 12:00 on the 10th
         cs(4, "2025-06-01T10:00:00Z", comments_count=1),   # months old: a new comment on an old changeset
     ])
 
     watcher.catch_up(0, 1)
 
+    # nothing is dropped: every change is written under the date its changeset was created
     assert sorted(p.name for p in (tmp_path / "changesets").iterdir()) == [
-        "2026-01-09.jsonl", "2026-01-10.jsonl"]
-    assert watcher.load_state() == 1                   # dropping must not stall the position
+        "2025-06-01.jsonl", "2026-01-08.jsonl", "2026-01-09.jsonl", "2026-01-10.jsonl"]
+    assert written_ids(tmp_path) == [4, 3, 2, 1]
+    assert watcher.load_state() == 1
 
 
-def test_freeze_boundary(tmp_path):
-    f = ChangesetWatcher.is_frozen
-    # 2026-01-08 starts accepting until 2026-01-10 01:00 (two days + 1h margin)
-    assert not f("2026-01-08", epoch(2026, 1, 10, 0, 59))
-    assert f("2026-01-08", epoch(2026, 1, 10, 1, 0))
-    assert not f("2026-01-10", epoch(2026, 1, 10, 12, 0))
+def test_a_date_settles_two_days_and_an_hour_after_it_starts(tmp_path):
+    watcher = ChangesetWatcher(tmp_path)
+    watcher.save_state(1, epoch(2026, 1, 10, 0, 59))
+    assert watcher.complete_before() == "2026-01-08"      # 2026-01-08 is still live (open changesets)
+
+    watcher.save_state(1, epoch(2026, 1, 10, 1, 0))
+    assert watcher.complete_before() == "2026-01-09"      # now 2026-01-08 is settled
 
 
 def test_malformed_creation_date_falls_back_to_the_batch_date(tmp_path, monkeypatch):
@@ -282,7 +285,7 @@ def test_keeping_up_logs_a_summary_every_interval_not_every_minute(tmp_path, mon
     assert info_lines(caplog)[-1] == "Changesets: 1 file (seq 5..5), 2 changesets"
 
 
-def test_summary_reports_dropped_updates_in_the_same_line(tmp_path, monkeypatch, caplog):
+def test_summary_counts_old_changesets_like_any_other(tmp_path, monkeypatch, caplog):
     watcher = ChangesetWatcher(tmp_path)
     patch_fetch(monkeypatch, watcher, lambda seq: [
         cs(seq, "2026-01-10T01:00:00Z"), cs(seq + 1000, "2025-06-01T00:00:00Z")])
@@ -290,5 +293,4 @@ def test_summary_reports_dropped_updates_in_the_same_line(tmp_path, monkeypatch,
 
     watcher.catch_up(0, 4)
 
-    assert info_lines(caplog) == [
-        "Changesets: 4 files (seq 1..4), 8 changesets, 4 updates to changesets older than 2 days dropped"]
+    assert info_lines(caplog) == ["Changesets: 4 files (seq 1..4), 8 changesets"]
