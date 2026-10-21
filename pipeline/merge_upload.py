@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -22,3 +23,19 @@ class R2Uploader:
         """Upload a file to R2."""
         logger.info("Uploading %s -> s3://%s/%s", local_path, self.bucket_name, remote_key)
         self.client.upload_file(str(local_path), self.bucket_name, remote_key)
+
+    def download_if_exists(self, remote_key: str, local_path: Path) -> bool:
+        """Download an object to `local_path`. Returns False if it does not exist.
+
+        Any other failure (network, credentials) raises: treating "could not reach R2" as "no
+        such file" would let a caller build a fresh file over a published one.
+        """
+        try:
+            self.client.head_object(Bucket=self.bucket_name, Key=remote_key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+        logger.info("Downloading s3://%s/%s -> %s", self.bucket_name, remote_key, local_path)
+        self.client.download_file(self.bucket_name, remote_key, str(local_path))
+        return True

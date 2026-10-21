@@ -38,10 +38,11 @@ The daemon will:
 - Follow element changes in a background thread, using day/hour/minute diffs depending on how far behind it is
 - Follow changeset replication (catching up on its small static files with parallel downloads, committed strictly in order), and write both to daily files in `data/deletions/` and `data/changesets/`
 - Build GeoParquet every `PARQUET_BUILD_INTERVAL` seconds and upload it to R2 (if configured)
-- Delete a day's raw file only once that day is complete and its parquet was built and uploaded (changesets are filed by the date they were created, and a date is complete two days after it starts)
-- Prune files older than `RETENTION_DAYS`
+- Delete a day's raw file only once that day is settled and its parquet was built and uploaded (changesets are filed by the date they were created, and a date settles two days after it starts)
+- Merge rows that arrive later for a day that is already published into that day's parquet, instead of rebuilding it from the late rows alone: a new comment on a months-old changeset replaces that changeset's row, and elements already in the file are skipped. R2 is treated as the source of truth for what is published, so the old file is downloaded from there when the local copy has been pruned. Late rows for one day are merged at most once per `LATE_MERGE_INTERVAL`
+- Prune local parquet older than `RETENTION_DAYS`. This applies to local files only: nothing is ever deleted from R2, and raw files are only removed after they have been published
 
-It resumes from `data/state/osc_position.json` (or an older `last_seq.txt`). If it is more than `CATCHUP_MAX_DAYS` behind it skips ahead and logs a warning about the gap.
+It resumes from `data/state/osc_position.json` (or an older `last_seq.txt`) and by default captures every change since then, however long it was down. Catching up costs about 3.5 hours of OSM API time per day of backlog; set `CATCHUP_MAX_DAYS` to bound it, at the price of a gap in the data.
 
 All intervals are configurable via `.env`.
 
@@ -91,11 +92,12 @@ See `.env.example` for all available settings:
 | `R2_SECRET_ACCESS_KEY` | | R2 secret key |
 | `R2_BUCKET_NAME` | `osm-undelete` | R2 bucket name |
 | `R2_PUBLIC_URL` | | Public base URL written into `metadata.json` |
-| `RETENTION_DAYS` | `90` | Days to keep old data files |
+| `RETENTION_DAYS` | `90` | Days to keep parquet locally (R2 keeps everything; it is also what late rows are merged into) |
 | `PARQUET_BUILD_INTERVAL` | `300` | Seconds between Parquet rebuilds |
-| `CATCHUP_MAX_DAYS` | `7` | Never catch up further back than this; older gaps are skipped |
+| `CATCHUP_MAX_DAYS` | unlimited | Optional: skip ahead rather than catch up on more than this many days, which leaves a gap in the data. Unset (or `0`/`none`) captures everything |
 | `CHANGESET_WORKERS` | `8` | Parallel changeset-file downloads while catching up (more than ~8 gets slower, not faster) |
-| `CHANGESET_FREEZE_DAYS` | `2` | Changesets are filed by creation date; a date stops accepting updates this long after it starts (later ones, mostly new comments on old changesets, are dropped) |
+| `CHANGESET_SETTLE_DAYS` | `2` | Changesets are filed by creation date; a date is published this long after it starts (open changesets can change for about 24h). Later updates, mostly new comments on old changesets, are merged into the published file. Old name: `CHANGESET_FREEZE_DAYS` |
+| `LATE_MERGE_INTERVAL` | `3600` | Seconds between merges of late rows into the same published day |
 | `OSM_API_MIN_INTERVAL` | `0.5` | Minimum seconds between OSM API requests |
 | `OSM_USER_AGENT` | `osm-undelete/0.1 (+https://github.com/iandees/undelete)` | User-Agent for OSM API requests; add your own contact |
 
@@ -122,7 +124,8 @@ uv run pytest
 │   ├── build_parquet.py     # Convert GeoJSON to GeoParquet with MAP tags
 │   ├── build_changeset_parquet.py
 │   ├── merge_upload.py      # Upload to R2 via boto3
-│   └── prune.py             # Delete old files past retention
+│   ├── publish.py           # Publish daily raw files; merge late rows into published parquet
+│   └── prune.py             # Delete old local parquet past retention
 ├── web/
 │   └── index.html           # Web app (DuckDB-WASM + MapLibre GL JS)
 ├── main.py                  # Daemon entry point
