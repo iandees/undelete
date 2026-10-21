@@ -38,3 +38,16 @@ def test_prune_keeps_non_date_files(tmp_path):
     pruned = prune_old_files(tmp_path, retention_days=10, today=date(2025, 1, 21))
     assert pruned == []
     assert metadata.exists()
+
+
+def test_prune_removes_old_changeset_jsonl(tmp_path):
+    # changeset raw files are .jsonl, not .geojsonl; they used to be skipped and linger forever
+    old_file = tmp_path / "2025-01-01.jsonl"
+    new_file = tmp_path / "2025-01-20.jsonl"
+    old_file.touch()
+    new_file.touch()
+
+    pruned = prune_old_files(tmp_path, retention_days=10, today=date(2025, 1, 21))
+    assert pruned == [old_file]
+    assert not old_file.exists()
+    assert new_file.exists()
