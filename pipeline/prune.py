@@ -19,8 +19,8 @@ def prune_old_files(directory: Path, retention_days: int, today: date | None = N
     directory.mkdir(parents=True, exist_ok=True)
 
     for f in sorted(directory.iterdir()):
-        # Handle .geojsonl files (date is the stem)
-        if f.is_file() and f.suffix in (".geojsonl", ".pmtiles"):
+        # Handle daily raw files (date is the stem): .geojsonl for elements, .jsonl for changesets
+        if f.is_file() and f.suffix in (".geojsonl", ".jsonl", ".pmtiles"):
             try:
                 file_date = date.fromisoformat(f.stem)
             except ValueError:
