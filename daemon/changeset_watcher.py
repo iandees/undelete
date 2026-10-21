@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,6 +38,9 @@ CHANGESET_STATE_URL = "https://planet.openstreetmap.org/replication/changesets/{
 # edited for ~24h) plus a margin for replication lag.
 FREEZE_DAYS = float(os.environ.get("CHANGESET_FREEZE_DAYS", "2"))
 FREEZE_MARGIN = 3600
+# When keeping up (about one file a minute) log a summary this often instead of every file;
+# a batch that catches up on several files is always logged, as one line.
+LOG_INTERVAL = 600
 
 
 def _seq_to_path(seq: int) -> str:
@@ -48,6 +52,9 @@ def _seq_to_path(seq: int) -> str:
 class ChangesetWatcher:
     def __init__(self, data_dir: Path, workers: int = 8):
         self.workers = workers
+        self.log_interval = LOG_INTERVAL
+        self._pending_log = {"files": 0, "changesets": 0, "dropped": 0, "first": None, "last": None}
+        self._last_log = time.monotonic()
         self._local = threading.local()  # one requests.Session per worker thread
         self.data_dir = Path(data_dir)
         self.state_dir = self.data_dir / "state"
@@ -194,7 +201,7 @@ class ChangesetWatcher:
             except Exception:
                 logger.exception("Could not get the time of changeset seq %d; will retry", last_seq)
                 return last_seq, 0
-        done = dropped = 0
+        done = dropped = total = 0
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = [pool.submit(self.fetch, seq) for seq in seqs]
             try:
@@ -210,7 +217,8 @@ class ChangesetWatcher:
                         # Files in a batch are minutes apart, so the starting time is a
                         # safe stand-in: it can only accept a little more, never less.
                         dropped += self._write(changesets, start_epoch)
-                        logger.info("Changeset seq %d: %d changesets", seq, len(changesets))
+                        total += len(changesets)
+                        logger.debug("Changeset seq %d: %d changesets", seq, len(changesets))
                     last_seq = seq
                     self.save_state(seq)
                     done += 1
@@ -223,7 +231,24 @@ class ChangesetWatcher:
             except Exception:
                 # Without the position time nothing is finalized until a later batch records it
                 logger.exception("Could not record the time of changeset seq %d", last_seq)
-        if dropped:
-            logger.info("Dropped %d updates to changesets from frozen dates (older than %g days)",
-                        dropped, FREEZE_DAYS)
+            self._log_progress(last_seq - done + 1, last_seq, done, total, dropped)
         return last_seq, done
+
+    def _log_progress(self, first, last, files, changesets, dropped):
+        """One summary line per catch-up batch; when keeping up, one per `log_interval`."""
+        pending = self._pending_log
+        pending["files"] += files
+        pending["changesets"] += changesets
+        pending["dropped"] += dropped
+        pending["first"] = first if pending["first"] is None else pending["first"]
+        pending["last"] = last
+        now = time.monotonic()
+        if files < 2 and now - self._last_log < self.log_interval:
+            return  # keeping up: fold into the next summary
+        logger.info("Changesets: %d file%s (seq %d..%d), %d changesets%s",
+                    pending["files"], "" if pending["files"] == 1 else "s",
+                    pending["first"], pending["last"], pending["changesets"],
+                    f", {pending['dropped']} updates to changesets older than "
+                    f"{FREEZE_DAYS:g} days dropped" if pending["dropped"] else "")
+        self._pending_log = {"files": 0, "changesets": 0, "dropped": 0, "first": None, "last": None}
+        self._last_log = now
