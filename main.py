@@ -70,7 +70,7 @@ def main():
     watcher = Watcher(data_dir)
     parquet_builder = ParquetBuilder(data_dir / "deletions", data_dir / "parquet")
 
-    cs_watcher = ChangesetWatcher(data_dir)
+    cs_watcher = ChangesetWatcher(data_dir, workers=int(os.environ.get("CHANGESET_WORKERS", "8")))
     cs_parquet_builder = ChangesetParquetBuilder(data_dir / "changesets", data_dir / "changeset_parquet")
 
     uploader = None
@@ -124,21 +124,8 @@ def main():
             logger.exception("Failed to get latest changeset sequence")
             cs_latest_seq = cs_last_seq
 
-        cs_seqs_processed = 0
-        while cs_last_seq < cs_latest_seq and cs_seqs_processed < MAX_SEQS_PER_TICK:
-            cs_next_seq = cs_last_seq + 1
-            try:
-                count = cs_watcher.fetch_and_process(cs_next_seq)
-                if count is None:
-                    break
-                if count > 0:
-                    logger.info("Changeset seq %d: %d changesets", cs_next_seq, count)
-                cs_last_seq = cs_next_seq
-                cs_watcher.save_state(cs_last_seq)
-                cs_seqs_processed += 1
-            except Exception:
-                logger.exception("Failed to process changeset seq %d", cs_next_seq)
-                break
+        cs_last_seq, cs_seqs_processed = cs_watcher.catch_up(
+            cs_last_seq, cs_latest_seq, MAX_SEQS_PER_TICK)
 
         # If we're still catching up, skip the sleep and loop immediately
         still_catching_up = cs_seqs_processed >= MAX_SEQS_PER_TICK
