@@ -112,6 +112,27 @@ def test_parse_create_way_polygon():
     assert p["old_geometry"] is None
 
 
+def test_parse_single_node_way_is_point():
+    source = BytesIO(b"""<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <action type="delete">
+    <old>
+      <way id="900" version="1" user="u" uid="1" timestamp="2020-01-01T00:00:00Z" changeset="1">
+        <nd ref="1" lon="3.0" lat="51.0"/>
+        <tag k="highway" v="path"/>
+      </way>
+    </old>
+    <new>
+      <way id="900" version="2" user="u" uid="1" timestamp="2025-01-01T00:00:00Z"
+           changeset="2" visible="false"/>
+    </new>
+  </action>
+</osm>""")
+    features = list(parse_adiff(source))
+    assert len(features) == 1
+    assert features[0]["geometry"] == {"type": "Point", "coordinates": [3.0, 51.0]}
+
+
 def test_parse_empty_xml():
     source = BytesIO(b'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6"></osm>')
     features = list(parse_adiff(source))

@@ -88,6 +88,14 @@ def _build_geo_metadata(geometry_types):
     })
 
 
+def _shape(geojson):
+    """Like shapely.geometry.shape, but tolerates single-point LineStrings
+    written by older versions of the parser."""
+    if geojson["type"] == "LineString" and len(geojson["coordinates"]) == 1:
+        geojson = {"type": "Point", "coordinates": geojson["coordinates"][0]}
+    return shape(geojson)
+
+
 class ParquetBuilder:
     def __init__(self, geojsonl_dir: Path, parquet_dir: Path):
         self.geojsonl_dir = Path(geojsonl_dir)
@@ -109,10 +117,10 @@ class ParquetBuilder:
                 continue
             feature = json.loads(line)
             props = feature["properties"]
-            geom = shape(feature["geometry"])
+            geom = _shape(feature["geometry"])
 
             old_geom_dict = props.get("old_geometry")
-            old_wkb = shapely.to_wkb(shape(old_geom_dict)) if old_geom_dict is not None else None
+            old_wkb = shapely.to_wkb(_shape(old_geom_dict)) if old_geom_dict is not None else None
 
             rows.append((
                 props["action"],
