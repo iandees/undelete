@@ -1,5 +1,6 @@
 import gzip
 import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -125,3 +126,61 @@ def test_complete_before_waits_an_hour_past_midnight(tmp_path):
     assert watcher.complete_before() == "2026-01-01"      # Jan 1 may still get edits
     watcher.save_position(Position(label=JAN1), epoch=JAN1 + 86400 + 3601)   # Jan 2 01:00:01
     assert watcher.complete_before() == "2026-01-02"      # Jan 1 is complete
+
+
+def info_lines(caplog):
+    return [r.getMessage() for r in caplog.records
+            if r.name == "daemon.watcher" and r.levelno == logging.INFO]
+
+
+def test_catch_up_logs_each_coarse_step_and_one_line_for_a_run_of_minutes(tmp_path, caplog):
+    watcher = make_watcher(tmp_path)
+    start = Position(label=JAN1)
+    watcher.save_position(start, epoch=JAN1)
+    route = watcher.planner_factory().route(start)
+    coarse = [s for s in route if s.interval != "minute"]
+    minutes = [s for s in route if s.interval == "minute"]
+    assert coarse and len(minutes) > 5                        # the scenario is what we think it is
+    caplog.set_level(logging.INFO, logger="daemon.watcher")
+
+    watcher.catch_up()
+
+    lines = info_lines(caplog)
+    assert len(lines) == len(coarse) + 1                      # not one line per minute diff
+    assert [l.split()[0] for l in lines[:-1]] == [s.interval for s in coarse]
+    assert lines[-1].startswith(f"minute diffs {minutes[0].seq}..{minutes[-1].seq} ({len(minutes)}) done: ")
+    assert f"{2 * len(minutes)} features" in lines[-1]        # FakeAugmenter yields 2 per diff
+
+
+def test_keeping_up_logs_a_summary_each_interval_not_each_minute(tmp_path, caplog):
+    watcher = make_watcher(tmp_path)
+    position = Position(minute=FIRST + 60 * 30 - 10)          # a few minutes from the end
+    watcher.save_position(position, epoch=FakeSource(1).ts(position.minute))
+    caplog.set_level(logging.INFO, logger="daemon.watcher")
+
+    for _ in range(3):                                        # a tick each, one new minute apiece
+        assert len(watcher.catch_up(max_steps=1)) == 1
+    assert info_lines(caplog) == []                           # still inside the interval
+
+    watcher.log_interval = 0                                  # interval elapsed
+    watcher.catch_up(max_steps=1)
+    (line,) = info_lines(caplog)
+    assert line.startswith("minute diffs ") and "(4)" in line and "8 features" in line
+
+    watcher.catch_up(max_steps=1)                             # counters start over
+    assert info_lines(caplog)[-1].startswith("minute diff ")
+    assert "(" not in info_lines(caplog)[-1].split(" done")[0]   # a single diff has no count
+
+
+def test_a_single_minute_diff_is_not_pluralized(tmp_path, caplog):
+    watcher = make_watcher(tmp_path)
+    position = Position(minute=FIRST + 60 * 30 - 10)
+    watcher.save_position(position, epoch=FakeSource(1).ts(position.minute))
+    watcher.log_interval = 0
+    caplog.set_level(logging.INFO, logger="daemon.watcher")
+
+    watcher.catch_up(max_steps=1)
+
+    (line,) = info_lines(caplog)
+    assert line.startswith(f"minute diff {position.minute + 1} done: 2 features, ")
+    assert line.endswith(" hours behind")
