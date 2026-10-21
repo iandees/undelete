@@ -153,3 +153,24 @@ def test_tags_as_map(tmp_path):
     tag_map = table.column("tags").to_pylist()[0]
     assert ("building", "yes") in tag_map
     assert ("name", "Test Building") in tag_map
+
+
+def test_single_point_linestring_from_older_data(tmp_path):
+    """Older parser versions wrote one-node ways as 1-point LineStrings."""
+    geojsonl_dir = tmp_path / "geojsonl"
+    geojsonl_dir.mkdir()
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir()
+
+    feat = _make_feature("delete", "way", 20, 0, 0,
+                         old_geometry={"type": "LineString", "coordinates": [[3.0, 51.0]]})
+    feat["geometry"] = {"type": "LineString", "coordinates": [[3.0, 51.0]]}
+    (geojsonl_dir / "2025-01-01.geojsonl").write_text(json.dumps(feat))
+
+    assert ParquetBuilder(geojsonl_dir, parquet_dir).build("2025-01-01")
+
+    table = pq.read_table(parquet_dir / "date=2025-01-01" / "data.parquet")
+    assert table.num_rows == 1
+    for col in ("geometry", "old_geometry"):
+        geom = shapely.from_wkb(table.column(col).to_pylist()[0])
+        assert (geom.x, geom.y) == (3.0, 51.0)

@@ -62,6 +62,9 @@ def _build_geometry(osm_type, attrs, nds, bounds, members=None, tags=None):
         if not nds:
             return None
         coords = [[float(nd["lon"]), float(nd["lat"])] for nd in nds]
+        if len(coords) == 1:
+            # Degenerate way with a single node; a LineString needs >= 2 points
+            return {"type": "Point", "coordinates": coords[0]}
         if len(nds) >= 4 and nds[0].get("ref") == nds[-1].get("ref"):
             return {"type": "Polygon", "coordinates": [coords]}
         return {"type": "LineString", "coordinates": coords}
