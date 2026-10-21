@@ -28,8 +28,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# LOG_LEVEL applies to this project's loggers only, so DEBUG doesn't also turn on urllib3's
+# per-connection chatter
+for _name in ("osm-changes", "daemon", "pipeline"):
+    logging.getLogger(_name).setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger("osm-changes")
-logger.setLevel(logging.DEBUG)
 
 POLL_INTERVAL = 60
 # Max changeset sequences to process per loop tick before yielding for parquet builds.
@@ -71,7 +74,7 @@ def main():
     watcher = Watcher(data_dir)
     parquet_builder = ParquetBuilder(data_dir / "deletions", data_dir / "parquet")
 
-    cs_watcher = ChangesetWatcher(data_dir, workers=int(os.environ.get("CHANGESET_WORKERS", "8")))
+    cs_watcher = ChangesetWatcher(data_dir, workers=int(os.environ.get("CHANGESET_WORKERS", "4")))
     cs_parquet_builder = ChangesetParquetBuilder(data_dir / "changesets", data_dir / "changeset_parquet")
 
     uploader = None
@@ -120,11 +123,9 @@ def main():
         now = time.time()
         sleep_for = next_poll - now
         if sleep_for > 0:
-            logger.debug("Sleeping %.1fs until next poll", sleep_for)
             time.sleep(sleep_for)
         now = time.time()
         next_poll = now + POLL_INTERVAL
-        logger.debug("Loop tick")
 
         # Fetch changeset replication
         try:

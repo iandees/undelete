@@ -22,7 +22,8 @@ import bisect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-PLANET_URL = "https://planet.openstreetmap.org/replication"
+from daemon.mirror import element_url
+
 PERIOD = {"hour": 3600, "day": 86400}
 
 
@@ -75,12 +76,12 @@ class HttpStateSource:
         return resp.text
 
     def latest(self, interval):
-        text = self._get(f"{PLANET_URL}/{interval}/state.txt")
+        text = self._get(element_url(interval, "state.txt"))
         return _parse_seq(text), parse_state(text)
 
     def timestamp(self, interval, seq):
         s = f"{seq:09d}"
-        return parse_state(self._get(f"{PLANET_URL}/{interval}/{s[0:3]}/{s[3:6]}/{s[6:9]}.state.txt"))
+        return parse_state(self._get(element_url(interval, f"{s[0:3]}/{s[3:6]}/{s[6:9]}.state.txt")))
 
 
 class Planner:

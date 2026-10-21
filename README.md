@@ -95,7 +95,9 @@ See `.env.example` for all available settings:
 | `RETENTION_DAYS` | `90` | Days to keep parquet locally (R2 keeps everything; it is also what late rows are merged into) |
 | `PARQUET_BUILD_INTERVAL` | `300` | Seconds between Parquet rebuilds |
 | `CATCHUP_MAX_DAYS` | unlimited | Optional: skip ahead rather than catch up on more than this many days, which leaves a gap in the data. Unset (or `0`/`none`) captures everything |
-| `CHANGESET_WORKERS` | `8` | Parallel changeset-file downloads while catching up (more than ~8 gets slower, not faster) |
+| `REPLICATION_MIRROR` | `s3` | Where replication files are downloaded from: `s3` (the AWS bucket planet redirects to) or `planet` (planet.openstreetmap.org, which times out under parallel connections) |
+| `CHANGESET_WORKERS` | `4` | Parallel changeset-file downloads while catching up (about 23 files/s from the S3 mirror, 43/s at 8). Keep it at 4 or lower with `REPLICATION_MIRROR=planet` |
+| `LOG_LEVEL` | `INFO` | Set to `DEBUG` for per-sequence changeset detail |
 | `CHANGESET_SETTLE_DAYS` | `2` | Changesets are filed by creation date; a date is published this long after it starts (open changesets can change for about 24h). Later updates, mostly new comments on old changesets, are merged into the published file. Old name: `CHANGESET_FREEZE_DAYS` |
 | `LATE_MERGE_INTERVAL` | `3600` | Seconds between merges of late rows into the same published day |
 | `OSM_API_MIN_INTERVAL` | `0.5` | Minimum seconds between OSM API requests |
@@ -113,6 +115,7 @@ uv run pytest
 
 ```
 ├── daemon/
+│   ├── mirror.py               # Where replication files are downloaded from (S3 or planet)
 │   ├── replication_planner.py  # Pick day/hour/minute diffs that get to "now" fastest
 │   ├── osc_augmenter.py        # osmChange + OSM API -> augmented-diff-style features (SQLite-backed)
 │   ├── watcher.py              # Follow replication, stage and write features, track position
