@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +33,10 @@ DEFAULT_MAX_DAYS = float(os.environ.get("CATCHUP_MAX_DAYS", "7"))
 # a minute or so; a date is only treated as complete this long after its last edit.
 COMPLETE_MARGIN = 3600
 RETRY_DELAY = 60
+# Day and hour diffs are logged one by one (there are few, and each takes a while). Minute
+# diffs are summarized: one line per run of them, and when keeping up (about one a minute)
+# at most one line per LOG_INTERVAL seconds.
+LOG_INTERVAL = 600
 
 
 def _default_planner(session):
@@ -68,6 +73,9 @@ class Watcher:
         # Held while appending to daily files and by anything that reads them (parquet
         # builds), so a reader never sees a half-written batch.
         self.lock = threading.Lock()
+        self.log_interval = LOG_INTERVAL
+        self._minutes = None            # minute diffs finished but not yet logged
+        self._last_log = time.monotonic()
         self._stop = threading.Event()
         self._thread = None
         self._clean_work_dir()
@@ -166,15 +174,40 @@ class Watcher:
                     self.save_position(position, epoch)
                     done.append(step)
                     exclude.clear()
-                    logger.info("%s %d done: %d features, %.1f hours behind", step.interval,
-                                step.seq, count, (planner.latest["minute"][1] - epoch) / 3600)
+                    self._log_step(step, count, (planner.latest["minute"][1] - epoch) / 3600)
                 if refresh:
                     planner = self.planner_factory()  # newer diffs may exist by now
         finally:
+            if sum(1 for step in done if step.interval == "minute") > 1:
+                self._flush_minutes()   # this pass caught up on a run of minute diffs
             self._drop_pending(pending)
             pool.shutdown(wait=True, cancel_futures=True)
             shutil.rmtree(spool, ignore_errors=True)
         return done
+
+    def _log_step(self, step: Step, count: int, hours_behind: float):
+        if step.interval != "minute":
+            self._flush_minutes()       # keep the log in order
+            logger.info("%s %d done: %d features, %.1f hours behind",
+                        step.interval, step.seq, count, hours_behind)
+            return
+        run = self._minutes
+        if run is None:
+            run = self._minutes = {"first": step.seq, "steps": 0, "features": 0}
+        run.update(last=step.seq, behind=hours_behind)
+        run["steps"] += 1
+        run["features"] += count
+        if time.monotonic() - self._last_log >= self.log_interval:
+            self._flush_minutes()
+
+    def _flush_minutes(self):
+        run, self._minutes = self._minutes, None
+        if not run:
+            return
+        which = (f"minute diff {run['first']}" if run["steps"] == 1
+                 else f"minute diffs {run['first']}..{run['last']} ({run['steps']})")
+        logger.info("%s done: %d features, %.1f hours behind", which, run["features"], run["behind"])
+        self._last_log = time.monotonic()
 
     @staticmethod
     def _drop_pending(pending):
