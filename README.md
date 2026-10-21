@@ -36,7 +36,7 @@ uv run python main.py
 
 The daemon will:
 - Follow element changes in a background thread, using day/hour/minute diffs depending on how far behind it is
-- Follow changeset replication, and write both to daily files in `data/deletions/` and `data/changesets/`
+- Follow changeset replication (catching up on its small static files with parallel downloads, committed strictly in order), and write both to daily files in `data/deletions/` and `data/changesets/`
 - Build GeoParquet every `PARQUET_BUILD_INTERVAL` seconds and upload it to R2 (if configured)
 - Delete a day's raw file only once that day is complete and its parquet was built and uploaded
 - Prune files older than `RETENTION_DAYS`
@@ -94,6 +94,7 @@ See `.env.example` for all available settings:
 | `RETENTION_DAYS` | `90` | Days to keep old data files |
 | `PARQUET_BUILD_INTERVAL` | `300` | Seconds between Parquet rebuilds |
 | `CATCHUP_MAX_DAYS` | `7` | Never catch up further back than this; older gaps are skipped |
+| `CHANGESET_WORKERS` | `8` | Parallel changeset-file downloads while catching up (more than ~8 gets slower, not faster) |
 | `OSM_API_MIN_INTERVAL` | `0.5` | Minimum seconds between OSM API requests |
 | `OSM_USER_AGENT` | `osm-undelete/0.1 (+https://github.com/iandees/undelete)` | User-Agent for OSM API requests; add your own contact |
 
