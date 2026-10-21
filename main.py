@@ -1,6 +1,7 @@
 """OSM Changes — main entry point.
 
-Runs the watcher daemon with periodic Parquet builds and R2 uploads.
+Runs the replication watcher (background thread) and changeset watcher, with periodic
+Parquet builds and R2 uploads.
 """
 
 import json
@@ -30,7 +31,7 @@ logger = logging.getLogger("osm-changes")
 logger.setLevel(logging.DEBUG)
 
 POLL_INTERVAL = 60
-# Max sequences to process per loop tick before yielding for parquet builds.
+# Max changeset sequences to process per loop tick before yielding for parquet builds.
 # Prevents unbounded memory growth during catch-up.
 MAX_SEQS_PER_TICK = 100
 
@@ -89,13 +90,6 @@ def main():
     parquet_build_interval = int(os.environ.get("PARQUET_BUILD_INTERVAL", "300"))
     retention_days = int(os.environ.get("RETENTION_DAYS", "90"))
 
-    last_seq = watcher.load_state()
-    if last_seq is None:
-        last_seq = watcher.get_latest_sequence()
-        logger.info("No saved state, starting from latest sequence: %d", last_seq)
-    else:
-        logger.info("Resuming from saved sequence: %d", last_seq)
-
     cs_last_seq = cs_watcher.load_state()
     if cs_last_seq is None:
         cs_last_seq = cs_watcher.get_latest_sequence()
@@ -104,9 +98,12 @@ def main():
         logger.info("Resuming changesets from saved sequence: %d", cs_last_seq)
 
     last_parquet_build = 0.0
+    published = {}  # date -> mtime of the raw file version whose parquet was built and uploaded
 
     logger.info("Starting watcher daemon (poll=%ds, parquet_build=%ds)",
                 POLL_INTERVAL, parquet_build_interval)
+    # Element catch-up runs in its own thread: a single day diff takes hours to process
+    watcher.start(POLL_INTERVAL)
 
     next_poll = 0.0
 
@@ -118,29 +115,7 @@ def main():
             time.sleep(sleep_for)
         now = time.time()
         next_poll = now + POLL_INTERVAL
-        logger.debug("Loop tick: last_seq=%d", last_seq)
-
-        try:
-            latest_seq = watcher.get_latest_sequence()
-        except Exception:
-            logger.exception("Failed to get latest sequence")
-            latest_seq = last_seq
-
-        seqs_processed = 0
-        while last_seq < latest_seq and seqs_processed < MAX_SEQS_PER_TICK:
-            next_seq = last_seq + 1
-            try:
-                count = watcher.fetch_and_process(next_seq)
-                if count is None:
-                    break
-                if count > 0:
-                    logger.info("Seq %d: %d changes", next_seq, count)
-                last_seq = next_seq
-                watcher.save_state(last_seq)
-                seqs_processed += 1
-            except Exception:
-                logger.exception("Failed to process seq %d", next_seq)
-                break
+        logger.debug("Loop tick")
 
         # Fetch changeset replication
         try:
@@ -166,8 +141,7 @@ def main():
                 break
 
         # If we're still catching up, skip the sleep and loop immediately
-        still_catching_up = (seqs_processed >= MAX_SEQS_PER_TICK or
-                             cs_seqs_processed >= MAX_SEQS_PER_TICK)
+        still_catching_up = cs_seqs_processed >= MAX_SEQS_PER_TICK
         if still_catching_up:
             next_poll = time.time()  # don't sleep, loop immediately
 
@@ -176,25 +150,24 @@ def main():
             try:
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-                # Element changes parquet
-                built = parquet_builder.build(today_str)
-                if built:
-                    logger.info("Built parquet for %s", today_str)
-                    if uploader:
-                        parquet_file = data_dir / "parquet" / f"date={today_str}" / "data.parquet"
-                        uploader.upload_file(parquet_file, f"osm-changes/date={today_str}/data.parquet")
-
-                for geojsonl in sorted((data_dir / "deletions").glob("*.geojsonl")):
-                    date_str = geojsonl.stem
-                    if date_str == today_str:
-                        continue
-                    if parquet_builder.build(date_str):
-                        logger.info("Built parquet for %s", date_str)
-                        if uploader:
-                            pf = data_dir / "parquet" / f"date={date_str}" / "data.parquet"
-                            uploader.upload_file(pf, f"osm-changes/date={date_str}/data.parquet")
-                        geojsonl.unlink()
-                        logger.info("Cleaned up %s", geojsonl.name)
+                # Element changes parquet. Build every daily file (partial days too, so
+                # today and a catch-up in progress stay fresh) under the watcher's lock so
+                # we never read a half-written batch. A raw file is only deleted once its
+                # date is complete -- the watcher has moved past it -- and the exact
+                # version we deleted was built and uploaded.
+                with watcher.lock:
+                    cutoff = watcher.complete_before()
+                    for geojsonl in sorted((data_dir / "deletions").glob("*.geojsonl")):
+                        date_str = geojsonl.stem
+                        if parquet_builder.build(date_str):
+                            logger.info("Built parquet for %s", date_str)
+                            if uploader:
+                                pf = data_dir / "parquet" / f"date={date_str}" / "data.parquet"
+                                uploader.upload_file(pf, f"osm-changes/date={date_str}/data.parquet")
+                            published[date_str] = geojsonl.stat().st_mtime
+                        if date_str < cutoff and published.get(date_str) == geojsonl.stat().st_mtime:
+                            geojsonl.unlink()
+                            logger.info("Cleaned up %s", geojsonl.name)
 
                 write_and_upload_metadata(data_dir / "parquet", uploader, r2_public_url, "osm-changes")
                 prune_old_files(data_dir / "parquet", retention_days)
