@@ -1,5 +1,6 @@
 import gzip
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -245,3 +246,49 @@ def test_seq_epoch_parses_the_state_file(tmp_path, monkeypatch):
 
     assert watcher.seq_epoch(7235369) == epoch(2026, 10, 21, 18, 38, 59)
     assert session.get.call_args[0][0].endswith("/007/235/369.state.txt")
+
+
+def info_lines(caplog):
+    return [r.getMessage() for r in caplog.records
+            if r.name == "daemon.changeset_watcher" and r.levelno == logging.INFO]
+
+
+def test_a_catch_up_batch_logs_one_line_not_one_per_sequence(tmp_path, monkeypatch, caplog):
+    watcher = ChangesetWatcher(tmp_path)
+    patch_fetch(monkeypatch, watcher, lambda seq: [cs(seq, "2026-01-10T01:00:00Z")] * 3)
+    caplog.set_level(logging.DEBUG, logger="daemon.changeset_watcher")
+
+    watcher.catch_up(100, 150)
+
+    assert info_lines(caplog) == ["Changesets: 50 files (seq 101..150), 150 changesets"]
+    debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert len(debug) == 50 and debug[0] == "Changeset seq 101: 3 changesets"   # detail is still there
+
+
+def test_keeping_up_logs_a_summary_every_interval_not_every_minute(tmp_path, monkeypatch, caplog):
+    watcher = ChangesetWatcher(tmp_path)
+    patch_fetch(monkeypatch, watcher, lambda seq: [cs(seq, "2026-01-10T01:00:00Z")] * 2)
+    caplog.set_level(logging.INFO, logger="daemon.changeset_watcher")
+
+    for seq in range(1, 4):                       # three ticks, one new file each
+        watcher.catch_up(seq - 1, seq)
+    assert info_lines(caplog) == []               # nothing yet: still inside the interval
+
+    watcher.log_interval = 0                      # the interval has now elapsed
+    watcher.catch_up(3, 4)
+    assert info_lines(caplog) == ["Changesets: 4 files (seq 1..4), 8 changesets"]
+
+    watcher.catch_up(4, 5)                        # and the counters start over
+    assert info_lines(caplog)[-1] == "Changesets: 1 file (seq 5..5), 2 changesets"
+
+
+def test_summary_reports_dropped_updates_in_the_same_line(tmp_path, monkeypatch, caplog):
+    watcher = ChangesetWatcher(tmp_path)
+    patch_fetch(monkeypatch, watcher, lambda seq: [
+        cs(seq, "2026-01-10T01:00:00Z"), cs(seq + 1000, "2025-06-01T00:00:00Z")])
+    caplog.set_level(logging.INFO, logger="daemon.changeset_watcher")
+
+    watcher.catch_up(0, 4)
+
+    assert info_lines(caplog) == [
+        "Changesets: 4 files (seq 1..4), 8 changesets, 4 updates to changesets older than 2 days dropped"]
