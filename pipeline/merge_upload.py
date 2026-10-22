@@ -24,6 +24,17 @@ class R2Uploader:
         logger.info("Uploading %s -> s3://%s/%s", local_path, self.bucket_name, remote_key)
         self.client.upload_file(str(local_path), self.bucket_name, remote_key)
 
+    def list_dates(self, prefix: str) -> list[str]:
+        """Dates that have a published `<prefix>/date=<date>/data.parquet`, sorted."""
+        dates = set()
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket_name, Prefix=f"{prefix}/date="):
+            for obj in page.get("Contents", []):
+                parts = obj["Key"].split("/")
+                if len(parts) == 3 and parts[2] == "data.parquet":
+                    dates.add(parts[1].split("=", 1)[1])
+        return sorted(dates)
+
     def download_if_exists(self, remote_key: str, local_path: Path) -> bool:
         """Download an object to `local_path`. Returns False if it does not exist.
 

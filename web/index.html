@@ -367,12 +367,16 @@ async function loadMetadata() {
   const csDates = (changesetMetadata && changesetMetadata.dates) || [];
 
   // Create DuckDB views covering all dates
-  await createViews(dates, csDates);
+  const failedViews = await createViews(dates, csDates);
 
   let statusParts = [];
   if (dates.length) statusParts.push(`${dates.length} element dates`);
   if (csDates.length) statusParts.push(`${csDates.length} changeset dates`);
-  setStatus(`DuckDB ready | ${statusParts.join(", ") || "No data found"}${latest ? " (latest: " + latest + ")" : ""}`);
+  if (failedViews && failedViews.length) {
+    setStatus("Could not load " + failedViews.join("; "), true);
+  } else {
+    setStatus(`DuckDB ready | ${statusParts.join(", ") || "No data found"}${latest ? " (latest: " + latest + ")" : ""}`);
+  }
 
   buildExamples(latest);
   const saved = localStorage.getItem("osm-changes-query");
@@ -388,22 +392,22 @@ async function loadMetadata() {
 
 async function createViews(dates, csDates) {
   if (!conn) return;
-  try {
-    if (dates.length > 0) {
-      const urls = dates.map(d => parquetUrl(d));
-      const urlList = urls.map(u => `'${u}'`).join(", ");
-      await conn.query(`CREATE OR REPLACE VIEW osm_data AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
-      console.log("Created 'osm_data' view with", dates.length, "dates");
+  // Each view is created on its own so that one failing doesn't take the other down
+  const failed = [];
+  const createView = async (name, dates, urlFor) => {
+    if (dates.length === 0) return;
+    try {
+      const urlList = dates.map(d => `'${urlFor(d)}'`).join(", ");
+      await conn.query(`CREATE OR REPLACE VIEW ${name} AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
+      console.log(`Created '${name}' view with`, dates.length, "dates");
+    } catch (e) {
+      console.warn(`Failed to create '${name}' view:`, e);
+      failed.push(`${name}: ${e.message || e}`);
     }
-    if (csDates.length > 0) {
-      const urls = csDates.map(d => changesetParquetUrl(d));
-      const urlList = urls.map(u => `'${u}'`).join(", ");
-      await conn.query(`CREATE OR REPLACE VIEW changesets AS SELECT * FROM read_parquet([${urlList}], hive_partitioning=true)`);
-      console.log("Created 'changesets' view with", csDates.length, "dates");
-    }
-  } catch (e) {
-    console.warn("Failed to create views:", e);
-  }
+  };
+  await createView("osm_data", dates, parquetUrl);
+  await createView("changesets", csDates, changesetParquetUrl);
+  return failed;
 }
 
 function parquetUrl(datePattern) {

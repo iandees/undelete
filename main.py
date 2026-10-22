@@ -43,16 +43,25 @@ MAX_SEQS_PER_TICK = 100
 def write_and_upload_metadata(
     parquet_dir: Path, uploader: R2Uploader | None, r2_public_url: str, r2_prefix: str,
 ):
-    """Write metadata.json with available date range and upload it."""
-    if not parquet_dir.exists():
+    """Write metadata.json with available date range and upload it.
+
+    With R2 the dates are what is published there: local folders are pruned after the
+    retention period and may hold a date whose upload hasn't happened, and the site fails
+    to load a date that is listed but missing.
+    """
+    if uploader:
+        date_dirs = uploader.list_dates(r2_prefix)
+    elif parquet_dir.exists():
+        date_dirs = sorted(
+            d.name.split("=", 1)[1]
+            for d in parquet_dir.iterdir()
+            if d.is_dir() and d.name.startswith("date=")
+        )
+    else:
         return
-    date_dirs = sorted(
-        d.name.split("=", 1)[1]
-        for d in parquet_dir.iterdir()
-        if d.is_dir() and d.name.startswith("date=")
-    )
     if not date_dirs:
         return
+    parquet_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = {
         "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
