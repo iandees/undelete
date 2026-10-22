@@ -28,12 +28,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from daemon.changeset_parser import parse_changesets
+from daemon.mirror import changeset_url
 
 logger = logging.getLogger(__name__)
 
-STATE_URL = "https://planet.openstreetmap.org/replication/changesets/state.yaml"
-CHANGESET_URL = "https://planet.openstreetmap.org/replication/changesets/{path}.osm.gz"
-CHANGESET_STATE_URL = "https://planet.openstreetmap.org/replication/changesets/{path}.state.txt"
 
 # A date is settled this many days after it begins (open changesets can be edited for ~24h)
 # plus a margin for replication lag. CHANGESET_FREEZE_DAYS is the old name for this setting.
@@ -51,7 +49,7 @@ def _seq_to_path(seq: int) -> str:
 
 
 class ChangesetWatcher:
-    def __init__(self, data_dir: Path, workers: int = 8):
+    def __init__(self, data_dir: Path, workers: int = 4):
         self.workers = workers
         self.log_interval = LOG_INTERVAL
         self._pending_log = {"files": 0, "changesets": 0, "first": None, "last": None}
@@ -65,7 +63,7 @@ class ChangesetWatcher:
 
     def get_latest_sequence(self) -> int:
         """Get the latest available sequence number from changeset replication."""
-        resp = requests.get(STATE_URL, timeout=30)
+        resp = requests.get(changeset_url("state.yaml"), timeout=30)
         resp.raise_for_status()
         state = yaml.safe_load(resp.text)
         return int(state["sequence"])
@@ -95,7 +93,7 @@ class ChangesetWatcher:
     def seq_epoch(self, seq: int) -> int:
         """When replication file `seq` was generated (from its state file), as epoch seconds."""
         resp = self._session().get(
-            CHANGESET_STATE_URL.format(path=_seq_to_path(seq)), timeout=(10, 30))
+            changeset_url(f"{_seq_to_path(seq)}.state.txt"), timeout=(10, 30))
         resp.raise_for_status()
         last_run = yaml.safe_load(resp.text)["last_run"]
         if isinstance(last_run, str):  # not parsed as a timestamp
@@ -133,7 +131,7 @@ class ChangesetWatcher:
 
         Returns the changesets in it, or None if it is not published yet (404).
         """
-        url = CHANGESET_URL.format(path=_seq_to_path(seq))
+        url = changeset_url(f"{_seq_to_path(seq)}.osm.gz")
         resp = self._session().get(url, timeout=(10, 60))
         if resp.status_code == 404:
             return None

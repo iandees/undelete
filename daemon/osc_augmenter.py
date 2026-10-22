@@ -43,10 +43,10 @@ from xml.etree import ElementTree as ET
 import requests
 
 from daemon.adiff_parser import _build_geometry
+from daemon.mirror import element_url
 
 logger = logging.getLogger(__name__)
 
-PLANET_URL = "https://planet.openstreetmap.org/replication"
 API_URL = "https://api.openstreetmap.org/api/0.6"
 USER_AGENT = os.environ.get(
     "OSM_USER_AGENT", "osm-undelete/0.1 (+https://github.com/iandees/undelete)"
@@ -460,7 +460,7 @@ class Augmenter:
 
 
 def latest_planet_sequence(session, interval="minute") -> int:
-    text = session.get(f"{PLANET_URL}/{interval}/state.txt", timeout=30).text
+    text = session.get(element_url(interval, "state.txt"), timeout=30).text
     for line in text.splitlines():
         if line.startswith("sequenceNumber="):
             return int(line.split("=")[1])
@@ -469,7 +469,7 @@ def latest_planet_sequence(session, interval="minute") -> int:
 
 def download_osc(session, seq: int, interval, directory) -> str:
     """Download an .osc.gz to `directory` and return its path."""
-    resp = session.get(f"{PLANET_URL}/{interval}/{seq_path(seq)}.osc.gz", stream=True, timeout=60)
+    resp = session.get(element_url(interval, f"{seq_path(seq)}.osc.gz"), stream=True, timeout=60)
     resp.raise_for_status()
     path = os.path.join(directory, f"{interval}-{seq}.osc.gz")
     with open(path, "wb") as f:

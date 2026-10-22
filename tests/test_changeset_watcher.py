@@ -294,3 +294,8 @@ def test_summary_counts_old_changesets_like_any_other(tmp_path, monkeypatch, cap
     watcher.catch_up(0, 4)
 
     assert info_lines(caplog) == ["Changesets: 4 files (seq 1..4), 8 changesets"]
+
+
+def test_default_concurrency_is_conservative(tmp_path):
+    # planet starts timing out connections (urllib3 retries) well before 8 parallel downloads
+    assert ChangesetWatcher(tmp_path).workers == 4
