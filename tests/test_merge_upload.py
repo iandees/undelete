@@ -22,3 +22,25 @@ def test_upload_file(tmp_path):
     )
 
 
+
+
+def _uploader(pages):
+    mock_client = MagicMock()
+    mock_client.get_paginator.return_value.paginate.return_value = pages
+    with patch("pipeline.merge_upload.boto3.client", return_value=mock_client):
+        return R2Uploader("https://x", "k", "s", "bucket"), mock_client
+
+
+def test_list_dates_returns_published_dates_across_pages():
+    pages = [
+        {"Contents": [{"Key": "osm-changes/date=2026-04-19/data.parquet"},
+                      {"Key": "osm-changes/metadata.json"}]},
+        {"Contents": [{"Key": "osm-changes/date=2026-04-18/data.parquet"},
+                      {"Key": "osm-changes/date=2026-04-20/other.txt"}]},
+        {},
+    ]
+    uploader, client = _uploader(pages)
+
+    assert uploader.list_dates("osm-changes") == ["2026-04-18", "2026-04-19"]
+    client.get_paginator.return_value.paginate.assert_called_once_with(
+        Bucket="bucket", Prefix="osm-changes/date=")
